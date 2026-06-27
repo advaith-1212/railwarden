@@ -11,7 +11,9 @@ cd /path/to/lfg
 uv tool install --editable .
 ```
 
-Prerequisites: Python 3.12, Git, tmux, and optional provider CLIs (`codex`, `claude`, `agy`, `grok`).
+Prerequisites: Python 3.12, Git, tmux, and provider CLIs as needed:
+`agy` for Claude Opus 4.6 Thinking planning and Gemini workers, `codex`
+for GPT-5.5 High workers, and `grok` for Composer 2.5 workers.
 
 ## Workflow
 
@@ -28,11 +30,13 @@ lfg adopt --dry-run /path/to/project
 lfg start
 ```
 
-`lfg` with no subcommand starts or attaches to the project tmux workspace. The workspace has six panes: Factory Controller, Hermes Console, Codex, Gemini, Composer, and DAG / Queue / Integration Status.
+`lfg` with no subcommand starts or attaches to the project tmux workspace. The workspace has six panes: Factory Controller, Hermes Console, Codex - GPT-5.5 High, Antigravity - Gemini 3.1 Pro High, Grok Composer 2.5, and DAG / Queue / Integration Status.
+
+Hermes is the coordination surface. In the Hermes pane you can inspect status and route instructions to worker panes with commands such as `codex: inspect the failing test`, `gemini: review the migration plan`, `composer: draft the UI patch`, or `broadcast: pause after current task`.
 
 ## Planning Approval
 
-The planner interface targets Claude Opus 4.6 Thinking through a provider-neutral planner. LFG does not fake planner success. If the local `claude` CLI is unavailable or its non-interactive Thinking invocation cannot be verified, `lfg doctor` reports the exact blocker.
+The planner interface targets Claude Opus 4.6 Thinking through Antigravity (`agy`). LFG does not fake planner success. If `agy` is unavailable or the model is not listed locally, `lfg doctor` reports the exact blocker.
 
 ## Recovery
 

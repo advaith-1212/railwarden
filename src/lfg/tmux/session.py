@@ -133,9 +133,9 @@ def create_session(config: ProjectConfig, *, attach: bool) -> str:
     titles = {
         controller: "Factory Controller",
         hermes: "Hermes Console",
-        codex: "Codex",
-        gemini: "Gemini",
-        composer: "Composer",
+        codex: "Codex - GPT-5.5 High",
+        gemini: "Antigravity - Gemini 3.1 Pro High",
+        composer: "Grok Composer 2.5",
         status: "DAG / Queue / Integration Status",
     }
     for pane, title in titles.items():

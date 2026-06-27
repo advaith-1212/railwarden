@@ -35,8 +35,8 @@ def default_project_payload(repository_root: Path) -> dict[str, object]:
             "board": f"lfg-{name}",
         },
         "planning": {
-            "provider": "claude",
-            "model": "claude-opus-4-6",
+            "provider": "antigravity",
+            "model": "Claude Opus 4.6 (Thinking)",
             "approval_required": True,
             "allow_fallback": False,
         },

@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -13,9 +14,15 @@ from lfg.config.init import initialize_project
 from lfg.config.loader import load_project_files
 from lfg.errors import LfgError
 from lfg.git import discover_repo
+from lfg.hermes.mailbox import (
+    append_message,
+    messages_for,
+    parse_directive,
+    read_messages,
+)
 from lfg.integration.manager import integrate_one
 from lfg.migration.tmom import dry_run_tmom_adoption
-from lfg.planning.claude import ClaudePlanner
+from lfg.planning.antigravity import AntigravityClaudePlanner
 from lfg.providers.adapters import default_adapters
 from lfg.scheduler.classifier import classify_packages, execution_plan
 from lfg.scheduler.dag import Dag
@@ -125,8 +132,17 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
         for name in files.project.worker_providers
         if name in adapters
     }
-    planner = ClaudePlanner(files.project.planner_model).doctor()
-    payload = {"providers": provider_status, "claude_planner": planner.__dict__}
+    planner = AntigravityClaudePlanner(files.project.planner_model).doctor()
+    payload = {
+        "providers": provider_status,
+        "planning_architect": planner.__dict__,
+        "coordination": {
+            "agent": "Hermes",
+            "mailbox": str(
+                files.project.runtime_directory / "state" / "hermes-mailbox.jsonl"
+            ),
+        },
+    }
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
 
@@ -150,12 +166,36 @@ def cmd_controller(_args: argparse.Namespace) -> int:
 
 
 def cmd_worker(args: argparse.Namespace) -> int:
-    print(f"LFG worker adapter pane ready: {args.provider}")
-    return 0
+    _, files = configured_project(Path.cwd())
+    provider = args.provider
+    print(f"LFG worker adapter pane ready: {provider}")
+    print("Waiting for Hermes directives. Press Ctrl-C to stop this pane.")
+    seen = 0
+    try:
+        while True:
+            all_messages = read_messages(files.project.runtime_directory)
+            for message in messages_for(
+                files.project.runtime_directory,
+                provider,
+                after=seen,
+            ):
+                print(
+                    f"[Hermes -> {provider}] {message.get('body', '')}",
+                    flush=True,
+                )
+            seen = len(all_messages)
+            time.sleep(2)
+    except KeyboardInterrupt:
+        return 0
 
 
 def cmd_hermes(_args: argparse.Namespace) -> int:
-    print("LFG Hermes console. Commands: status, plan, pause, resume, quit")
+    _, files = configured_project(Path.cwd())
+    print("LFG Hermes console.")
+    print("Commands: status, plan, pause, resume, quit")
+    print(
+        "Route messages with `codex: ...`, `gemini: ...`, `composer: ...`, or `broadcast: ...`."
+    )
     while True:
         try:
             line = input("hermes> ").strip()
@@ -165,6 +205,15 @@ def cmd_hermes(_args: argparse.Namespace) -> int:
             return 0
         if line in {"status", "plan"}:
             cmd_plan(argparse.Namespace())
+        elif directive := parse_directive(line):
+            recipient, body = directive
+            append_message(
+                files.project.runtime_directory,
+                sender="hermes",
+                recipient=recipient,
+                body=body,
+            )
+            print(f"Sent to {recipient}.")
         elif line:
             print(f"Recorded coordinator instruction: {line}")
 

@@ -13,6 +13,7 @@ class ProviderAdapter:
     name: str
     executable: str
     model: str
+    reasoning_effort: str | None = None
 
     def health_check(self) -> dict[str, object]:
         path = shutil.which(self.executable)
@@ -41,7 +42,7 @@ class ProviderAdapter:
         self, workspace: Path, prompt_path: Path, result_path: Path
     ) -> list[str]:
         if self.name == "codex":
-            return [
+            command = [
                 self.executable,
                 "exec",
                 "--sandbox",
@@ -54,6 +55,12 @@ class ProviderAdapter:
                 str(result_path),
                 str(prompt_path),
             ]
+            if self.reasoning_effort is not None:
+                command[8:8] = [
+                    "--config",
+                    f'model_reasoning_effort="{self.reasoning_effort}"',
+                ]
+            return command
         if self.name == "antigravity":
             return [
                 self.executable,
@@ -84,7 +91,7 @@ class ProviderAdapter:
 
 def default_adapters() -> dict[str, ProviderAdapter]:
     return {
-        "codex": ProviderAdapter("codex", "codex", "gpt-5.5"),
+        "codex": ProviderAdapter("codex", "codex", "gpt-5.5", "high"),
         "antigravity": ProviderAdapter("antigravity", "agy", "Gemini 3.1 Pro (High)"),
         "composer": ProviderAdapter("composer", "grok", "grok-composer-2.5-fast"),
     }
