@@ -36,7 +36,7 @@ Hermes is the coordination surface. In the Hermes pane you can submit `goal <tex
 
 ## Planning Approval
 
-The planner interface targets Claude Opus 4.6 Thinking through Antigravity (`agy`). `lfg run "<goal>"` stores the goal under `.lfg-runtime/runs/<run_id>/goal.md`, asks the planner for a human plan plus DAG, writes the pending plan to runtime state, and waits. `lfg approve plan` writes `.lfg/plan.md` and `.lfg/work_packages.yaml`, creates durable task state, and lets `lfg controller` schedule work.
+The planner interface targets Claude Opus 4.6 Thinking through Antigravity (`agy`). `lfg run "<goal>"` stores the goal under `.lfg-runtime/runs/<run_id>/goal.md`, asks the planner for a human plan, derives machine-readable work packages when needed, writes the pending plan to runtime state, and waits. `lfg approve plan` writes `.lfg/plan.md` and `.lfg/work_packages.yaml`, creates durable task state, and lets `lfg controller` schedule work.
 
 LFG does not fake planner success. If `agy` is unavailable or the model is not listed locally, `lfg doctor` reports the exact blocker.
 
