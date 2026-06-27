@@ -1,0 +1,1 @@
+# Providers\n\nCodex, Antigravity, and Composer are adapters with health checks, command construction, cancellation, result collection, and failure classification boundaries.\n

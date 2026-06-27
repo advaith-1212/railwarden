@@ -1,0 +1,1 @@
+# Tmux\n\nEach project gets a deterministic `lfg-<project>-<hash>` session with six panes and persisted pane identifiers.\n

@@ -1,0 +1,1 @@
+# Planning\n\nClaude Opus 4.6 Thinking is represented by a provider-neutral planner interface with honest doctor checks and no silent fallback.\n

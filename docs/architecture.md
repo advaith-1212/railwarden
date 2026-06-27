@@ -1,0 +1,1 @@
+# Architecture\n\nLFG separates engine code from project-local configuration. The engine reads `.lfg/` and writes `.lfg-runtime/`; it never stores runtime state in product source history.\n

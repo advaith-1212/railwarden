@@ -1,0 +1,1 @@
+# Security\n\nLFG excludes `.env`, credentials, runtime logs, provider transcripts, `.agent-runtime`, `.lfg-runtime`, Git internals, and product source code from migration.\n

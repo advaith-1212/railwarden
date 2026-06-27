@@ -1,0 +1,1 @@
+# Tmom Adoption\n\nThe TMOM importer reads the legacy `orchestration/` directory in dry-run mode and reports branches, merged packages, worktrees, validation policy, and provider configuration without modifying TMOM.\n

@@ -1,0 +1,1 @@
+# Recovery\n\nAtomic writes, locks, process groups, validation evidence, and Git checks support recovery after crashes, stale ownership, and interrupted validation.\n

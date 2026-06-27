@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+.lfg-runtime/
+artifacts/*.log
+artifacts/*.json
+!artifacts/.gitkeep
+!artifacts/tmom-adoption-dry-run.md
+work/

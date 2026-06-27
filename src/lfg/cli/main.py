@@ -1,0 +1,246 @@
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+from lfg import __version__
+from lfg.config.init import initialize_project
+from lfg.config.loader import load_project_files
+from lfg.errors import LfgError
+from lfg.git import discover_repo
+from lfg.integration.manager import integrate_one
+from lfg.migration.tmom import dry_run_tmom_adoption
+from lfg.planning.claude import ClaudePlanner
+from lfg.providers.adapters import default_adapters
+from lfg.scheduler.classifier import classify_packages, execution_plan
+from lfg.scheduler.dag import Dag
+from lfg.tmux.session import create_session, panes, session_name, stop_session
+
+
+def configured_project(start: Path) -> tuple[Path, Any]:
+    root = discover_repo(start)
+    return root, load_project_files(root)
+
+
+def cmd_init(args: argparse.Namespace) -> int:
+    root = discover_repo(Path.cwd())
+    if not args.yes:
+        result = initialize_project(root, yes=False)
+        print("Proposed .gitignore additions:")
+        print(result["gitignore_proposal"] or "none")
+        print("Run `lfg init --yes` to apply.")
+        return 0
+    print(json.dumps(initialize_project(root, yes=True), indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_adopt(args: argparse.Namespace) -> int:
+    target = (
+        Path(args.repository).resolve()
+        if args.repository
+        else discover_repo(Path.cwd())
+    )
+    source = Path(args.source).resolve()
+    report = dry_run_tmom_adoption(target, source)
+    markdown = report.markdown()
+    if args.dry_run:
+        output_path = Path(args.report).resolve()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(markdown, encoding="utf-8")
+        print(markdown)
+        print(f"Report written: {output_path}")
+        return 0
+    raise LfgError(
+        "Non-dry-run adopt is intentionally approval-gated; run with --dry-run first."
+    )
+
+
+def cmd_plan(_args: argparse.Namespace) -> int:
+    _, files = configured_project(Path.cwd())
+    states = classify_packages(files.project, files.packages)
+    plan = execution_plan(files.project, states)
+    critical_path = Dag(files.packages).critical_path() if files.packages else ()
+    payload = {
+        "packages": [state.to_dict() for state in states],
+        "plan": plan,
+        "critical_path": list(critical_path),
+        "expected_concurrency": files.project.worker_concurrency,
+    }
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_start(args: argparse.Namespace) -> int:
+    _, files = configured_project(Path.cwd())
+    name = create_session(files.project, attach=not args.no_attach)
+    print(f"Started LFG session: {name}")
+    return 0
+
+
+def cmd_attach(_args: argparse.Namespace) -> int:
+    _, files = configured_project(Path.cwd())
+    name = session_name(files.project)
+    subprocess.run(["tmux", "attach-session", "-t", name], check=False)
+    return 0
+
+
+def cmd_stop(_args: argparse.Namespace) -> int:
+    _, files = configured_project(Path.cwd())
+    stopped = stop_session(files.project)
+    print("Stopped." if stopped else "LFG session is not running.")
+    return 0
+
+
+def cmd_status(_args: argparse.Namespace) -> int:
+    _, files = configured_project(Path.cwd())
+    payload = {"session": session_name(files.project), "panes": panes(files.project)}
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_doctor(_args: argparse.Namespace) -> int:
+    _, files = configured_project(Path.cwd())
+    adapters = default_adapters()
+    provider_status = {
+        name: adapters[name].health_check()
+        for name in files.project.worker_providers
+        if name in adapters
+    }
+    planner = ClaudePlanner(files.project.planner_model).doctor()
+    payload = {"providers": provider_status, "claude_planner": planner.__dict__}
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_config(_args: argparse.Namespace) -> int:
+    _, files = configured_project(Path.cwd())
+    print(json.dumps(files.project.__dict__, indent=2, sort_keys=True, default=str))
+    return 0
+
+
+def cmd_logs(_args: argparse.Namespace) -> int:
+    _, files = configured_project(Path.cwd())
+    log_dir = files.project.runtime_directory / "logs"
+    print(log_dir)
+    return 0
+
+
+def cmd_controller(_args: argparse.Namespace) -> int:
+    print("LFG controller ready. Use `lfg plan` to inspect the current queue.")
+    return 0
+
+
+def cmd_worker(args: argparse.Namespace) -> int:
+    print(f"LFG worker adapter pane ready: {args.provider}")
+    return 0
+
+
+def cmd_hermes(_args: argparse.Namespace) -> int:
+    print("LFG Hermes console. Commands: status, plan, pause, resume, quit")
+    while True:
+        try:
+            line = input("hermes> ").strip()
+        except EOFError:
+            return 0
+        if line in {"quit", "exit"}:
+            return 0
+        if line in {"status", "plan"}:
+            cmd_plan(argparse.Namespace())
+        elif line:
+            print(f"Recorded coordinator instruction: {line}")
+
+
+def cmd_integrate(args: argparse.Namespace) -> int:
+    _, files = configured_project(Path.cwd())
+    states = classify_packages(files.project, files.packages)
+    plan = execution_plan(files.project, states)
+    queue = plan.get("integration_queue", [])
+    if not isinstance(queue, list) or not queue:
+        print("Integration queue is empty.")
+        return 0
+    print(
+        json.dumps(
+            integrate_one(
+                config=files.project,
+                candidate=queue[0],
+                validation_commands=files.validation,
+                execute=args.execute,
+            ),
+            indent=2,
+            sort_keys=True,
+            default=str,
+        )
+    )
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="lfg")
+    parser.add_argument("--version", action="store_true", help="Show version and exit.")
+    sub = parser.add_subparsers(dest="command")
+    init = sub.add_parser("init")
+    init.add_argument("--yes", action="store_true")
+    init.set_defaults(func=cmd_init)
+    adopt = sub.add_parser("adopt")
+    adopt.add_argument("repository", nargs="?")
+    adopt.add_argument("--dry-run", action="store_true")
+    adopt.add_argument(
+        "--source", default="/Users/advaith/CODE/tmom-worktrees/orchestrator"
+    )
+    adopt.add_argument("--report", default="artifacts/tmom-adoption-dry-run.md")
+    adopt.set_defaults(func=cmd_adopt)
+    for name, func in [
+        ("plan", cmd_plan),
+        ("replan", cmd_plan),
+        ("status", cmd_status),
+        ("logs", cmd_logs),
+        ("doctor", cmd_doctor),
+        ("config", cmd_config),
+    ]:
+        item = sub.add_parser(name)
+        item.set_defaults(func=func)
+    start = sub.add_parser("start")
+    start.add_argument("--no-attach", action="store_true")
+    start.set_defaults(func=cmd_start)
+    sub.add_parser("attach").set_defaults(func=cmd_attach)
+    sub.add_parser("stop").set_defaults(func=cmd_stop)
+    restart = sub.add_parser("restart")
+    restart.add_argument("--no-attach", action="store_true")
+    restart.set_defaults(func=lambda args: (cmd_stop(args), cmd_start(args))[1])
+    integrate = sub.add_parser("integrate")
+    integrate.add_argument("--execute", action="store_true")
+    integrate.set_defaults(func=cmd_integrate)
+    sub.add_parser("controller").set_defaults(func=cmd_controller)
+    worker = sub.add_parser("worker")
+    worker.add_argument("provider")
+    worker.set_defaults(func=cmd_worker)
+    sub.add_parser("hermes").set_defaults(func=cmd_hermes)
+    sub.add_parser("version").set_defaults(func=lambda _args: print(__version__) or 0)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.version:
+        print(__version__)
+        return 0
+    if args.command is None:
+        return cmd_start(argparse.Namespace(no_attach=False))
+    func = getattr(args, "func", None)
+    if func is None:
+        parser.print_help()
+        return 0
+    try:
+        return int(func(args))
+    except LfgError as exc:
+        print(f"lfg: {exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

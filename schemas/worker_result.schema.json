@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lfg.local/schemas/worker-result.schema.json",
+  "title": "LFG Worker Result",
+  "type": "object"
+}

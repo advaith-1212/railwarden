@@ -1,0 +1,1 @@
+# Configuration\n\nProject config uses relative paths and resolves them dynamically. Validation commands declare `cwd` and `argv`.\n

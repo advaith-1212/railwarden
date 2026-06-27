@@ -1,0 +1,1 @@
+# Cli\n\nCommands: `init`, `adopt`, `plan`, `replan`, `start`, `attach`, `status`, `stop`, `restart`, `logs`, `doctor`, `config`, `version`, and default `lfg`.\n

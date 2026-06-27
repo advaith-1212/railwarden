@@ -1,0 +1,1 @@
+# Development\n\nRun `ruff check`, `ruff format --check`, `mypy --strict`, and `pytest`. Tests use disposable Git repositories and fake providers.\n
