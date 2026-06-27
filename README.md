@@ -7,7 +7,7 @@ LFG is not a TMOM feature and is not nested inside a product repository. TMOM's 
 ## Install
 
 ```bash
-cd /Users/advaith/CODE/lfg
+cd /path/to/lfg
 uv tool install --editable .
 ```
 

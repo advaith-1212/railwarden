@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -26,6 +27,20 @@ def configured_project(start: Path) -> tuple[Path, Any]:
     return root, load_project_files(root)
 
 
+def default_legacy_source(target: Path, explicit_source: str | None) -> Path:
+    if explicit_source:
+        return Path(explicit_source).resolve()
+    env_source = os.environ.get("LFG_TMOM_SOURCE") or os.environ.get("LFG_TMON_SOURCE")
+    if env_source:
+        return Path(env_source).resolve()
+    candidate = target.parent / "tmom-worktrees" / "orchestrator"
+    if candidate.exists():
+        return candidate.resolve()
+    raise LfgError(
+        "Legacy adoption requires --source when no sibling prototype exists."
+    )
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     root = discover_repo(Path.cwd())
     if not args.yes:
@@ -44,7 +59,7 @@ def cmd_adopt(args: argparse.Namespace) -> int:
         if args.repository
         else discover_repo(Path.cwd())
     )
-    source = Path(args.source).resolve()
+    source = default_legacy_source(target, args.source)
     report = dry_run_tmom_adoption(target, source)
     markdown = report.markdown()
     if args.dry_run:
@@ -188,9 +203,7 @@ def build_parser() -> argparse.ArgumentParser:
     adopt = sub.add_parser("adopt")
     adopt.add_argument("repository", nargs="?")
     adopt.add_argument("--dry-run", action="store_true")
-    adopt.add_argument(
-        "--source", default="/Users/advaith/CODE/tmom-worktrees/orchestrator"
-    )
+    adopt.add_argument("--source")
     adopt.add_argument("--report", default="artifacts/tmom-adoption-dry-run.md")
     adopt.set_defaults(func=cmd_adopt)
     for name, func in [
