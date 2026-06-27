@@ -32,16 +32,26 @@ lfg start
 
 `lfg` with no subcommand starts or attaches to the project tmux workspace. The workspace has six panes: Factory Controller, Hermes Console, Codex - GPT-5.5 High, Antigravity - Gemini 3.1 Pro High, Grok Composer 2.5, and DAG / Queue / Integration Status.
 
-Hermes is the coordination surface. In the Hermes pane you can inspect status and route instructions to worker panes with commands such as `codex: inspect the failing test`, `gemini: review the migration plan`, `composer: draft the UI patch`, or `broadcast: pause after current task`.
+Hermes is the coordination surface. In the Hermes pane you can submit `goal <text>`, review the generated plan, then run `approve plan` to allow unattended execution. You can also inspect `status`, `dag`, `agents`, `tasks`, and `logs`; route instructions with `codex: ...`, `gemini: ...`, `composer: ...`, or `broadcast: ...`; and use `handoff <task_id> [provider]`, `retry <task_id>`, `block <task_id>`, and `unblock <task_id>` for manual intervention.
 
 ## Planning Approval
 
-The planner interface targets Claude Opus 4.6 Thinking through Antigravity (`agy`). LFG does not fake planner success. If `agy` is unavailable or the model is not listed locally, `lfg doctor` reports the exact blocker.
+The planner interface targets Claude Opus 4.6 Thinking through Antigravity (`agy`). `lfg run "<goal>"` stores the goal under `.lfg-runtime/runs/<run_id>/goal.md`, asks the planner for a human plan plus DAG, writes the pending plan to runtime state, and waits. `lfg approve plan` writes `.lfg/plan.md` and `.lfg/work_packages.yaml`, creates durable task state, and lets `lfg controller` schedule work.
+
+LFG does not fake planner success. If `agy` is unavailable or the model is not listed locally, `lfg doctor` reports the exact blocker.
+
+## Execution
+
+The controller is deterministic: it releases DAG nodes after dependencies are merged, chooses healthy providers by preferred provider and configured priority, provisions one Git worktree per task, writes a prompt and expected result path, launches provider CLIs, validates structured worker result JSON, records events in `.lfg-runtime/events.jsonl`, and integrates one branch at a time through the existing validation and rollback flow.
+
+Use `lfg dashboard` for the terminal-native DAG, queue, provider health, recent event, and Git graph view. Use `lfg events` to inspect raw runtime events.
 
 ## Recovery
 
-Runtime state is versioned and stored under `.lfg-runtime/`. Git remains the source of truth for code state. LFG stores supplemental state, logs, validation evidence, locks, and process identifiers under the runtime directory.
+Runtime state is versioned and stored under `.lfg-runtime/`. Git remains the source of truth for code state. LFG stores supplemental state, logs, validation evidence, locks, handoff packets, and process identifiers under the runtime directory.
+
+Quota, rate-limit, capacity, and auth failures are classified from provider logs. Partial work is preserved by default; LFG writes `.lfg-runtime/handoffs/<task_id>-<attempt>.md` with the branch, worktree, log excerpt, status, diff summary, tests, and next instruction before assigning the next eligible provider or blocking for human action.
 
 ## Limitations
 
-Provider adapters expose command construction and health checks. Automated tests use fake/disposable repositories and do not make paid model calls. Hermes is implemented as a generic interactive console and task backend; legacy `tmomcoord` behavior is documented as an adapter target.
+Provider adapters expose command construction, health checks, and failure classification only. Automated tests use fake/disposable repositories and do not make paid model calls. Hermes is implemented as an interactive control plane backed by file state; legacy `tmomcoord` behavior is documented as an adapter target.

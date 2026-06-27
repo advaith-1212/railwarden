@@ -150,7 +150,7 @@ def create_session(config: ProjectConfig, *, attach: bool) -> str:
         codex: f"cd {root!r} && lfg worker codex 2>&1 | tee -a {str(log_dir / 'codex-worker.log')!r}",
         gemini: f"cd {root!r} && lfg worker antigravity 2>&1 | tee -a {str(log_dir / 'antigravity-worker.log')!r}",
         composer: f"cd {root!r} && lfg worker composer 2>&1 | tee -a {str(log_dir / 'composer-worker.log')!r}",
-        status: f"cd {root!r} && watch -n 5 lfg plan",
+        status: f"cd {root!r} && watch -n 5 lfg dashboard",
     }
     for pane, command in commands.items():
         tmux(["send-keys", "-t", pane, command, "C-m"])

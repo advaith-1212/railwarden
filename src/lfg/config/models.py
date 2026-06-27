@@ -23,8 +23,18 @@ class WorkPackage:
     owned_paths: tuple[str, ...] = ()
     forbidden_paths: tuple[str, ...] = ()
     acceptance_tests: tuple[str, ...] = ()
+    preferred_providers: tuple[str, ...] = ()
     branch: str | None = None
     worktree: Path | None = None
+    status_notes: str | None = None
+
+
+@dataclass(frozen=True)
+class ProviderConfig:
+    name: str
+    priority: int
+    capabilities: tuple[str, ...] = ()
+    cooldown_seconds: int = 3600
 
 
 @dataclass(frozen=True)
@@ -40,6 +50,13 @@ class ProjectConfig:
     planner_fallback_allowed: bool
     worker_concurrency: int
     worker_providers: tuple[str, ...]
+    provider_configs: dict[str, ProviderConfig] = field(default_factory=dict)
+    hermes_primary_model: str = "Claude Opus 4.6 (Thinking)"
+    hermes_fallback_model: str | None = None
+    hermes_allow_fallback: bool = False
+    execution_require_plan_approval: bool = True
+    execution_preserve_partial_work_on_handoff: bool = True
+    monitoring_git_graph: bool = True
 
 
 ProviderStatus = Literal[

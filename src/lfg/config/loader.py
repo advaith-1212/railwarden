@@ -8,6 +8,7 @@ import yaml
 from lfg.config.models import (
     ProjectConfig,
     ProjectFiles,
+    ProviderConfig,
     ValidationCommand,
     WorkPackage,
 )
@@ -38,18 +39,45 @@ def load_project_config(repository_root: Path) -> ProjectConfig:
     if not isinstance(project, dict):
         raise ConfigurationError("project.yaml must define project mapping")
     planning = payload.get("planning", {})
+    hermes = payload.get("hermes", {})
+    providers = payload.get("providers", {})
     workers = payload.get("workers", {})
+    execution = payload.get("execution", {})
+    monitoring = payload.get("monitoring", {})
     runtime = payload.get("runtime", {})
     if (
         not isinstance(planning, dict)
+        or not isinstance(hermes, dict)
+        or not isinstance(providers, dict)
         or not isinstance(workers, dict)
+        or not isinstance(execution, dict)
+        or not isinstance(monitoring, dict)
         or not isinstance(runtime, dict)
     ):
         raise ConfigurationError("Invalid project.yaml structure")
     providers_raw = workers.get("providers", ["codex", "antigravity", "composer"])
     if not isinstance(providers_raw, list):
         raise ConfigurationError("workers.providers must be a list")
+    worker_provider_names = tuple(str(item) for item in providers_raw)
+    provider_configs: dict[str, ProviderConfig] = {}
+    for index, name in enumerate(worker_provider_names):
+        raw = providers.get(name, {})
+        if raw is None:
+            raw = {}
+        if not isinstance(raw, dict):
+            raise ConfigurationError(f"providers.{name} must be a mapping")
+        capabilities = raw.get("capabilities", [])
+        if not isinstance(capabilities, list):
+            raise ConfigurationError(f"providers.{name}.capabilities must be a list")
+        provider_configs[name] = ProviderConfig(
+            name=name,
+            priority=int(raw.get("priority", (index + 1) * 10)),
+            capabilities=tuple(str(item) for item in capabilities),
+            cooldown_seconds=int(raw.get("cooldown_seconds", 3600)),
+        )
     name = str(project.get("name") or repository_root.name)
+    default_model = str(planning.get("model", "Claude Opus 4.6 (Thinking)"))
+    hermes_fallback = hermes.get("fallback_model")
     return ProjectConfig(
         name=name,
         repository_root=repository_root,
@@ -66,10 +94,27 @@ def load_project_config(repository_root: Path) -> ProjectConfig:
         ),
         board=str(project.get("board", f"lfg-{name}")),
         planner_provider=str(planning.get("provider", "antigravity")),
-        planner_model=str(planning.get("model", "Claude Opus 4.6 (Thinking)")),
-        planner_fallback_allowed=bool(planning.get("allow_fallback", False)),
+        planner_model=default_model,
+        planner_fallback_allowed=bool(
+            planning.get("allow_fallback", hermes.get("allow_fallback", False))
+        ),
         worker_concurrency=int(workers.get("concurrency", 3)),
-        worker_providers=tuple(str(item) for item in providers_raw),
+        worker_providers=worker_provider_names,
+        provider_configs=provider_configs,
+        hermes_primary_model=str(hermes.get("primary_model", default_model)),
+        hermes_fallback_model=str(hermes_fallback) if hermes_fallback else None,
+        hermes_allow_fallback=bool(
+            hermes.get("allow_fallback", planning.get("allow_fallback", False))
+        ),
+        execution_require_plan_approval=bool(
+            execution.get(
+                "require_plan_approval", planning.get("approval_required", True)
+            )
+        ),
+        execution_preserve_partial_work_on_handoff=bool(
+            execution.get("preserve_partial_work_on_handoff", True)
+        ),
+        monitoring_git_graph=bool(monitoring.get("git_graph", True)),
     )
 
 
@@ -96,8 +141,14 @@ def load_work_packages(repository_root: Path) -> dict[str, WorkPackage]:
             acceptance_tests=tuple(
                 str(item) for item in raw.get("acceptance_tests", [])
             ),
+            preferred_providers=tuple(
+                str(item) for item in raw.get("preferred_providers", [])
+            ),
             branch=str(raw["branch"]) if raw.get("branch") else None,
             worktree=Path(str(raw["worktree"])) if raw.get("worktree") else None,
+            status_notes=str(raw["status_notes"])
+            if raw.get("status_notes") is not None
+            else None,
         )
     return packages
 

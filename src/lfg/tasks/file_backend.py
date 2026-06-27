@@ -8,7 +8,12 @@ from lfg.util.atomic import atomic_write_json
 
 ACTIVE_TASK_STATES = {
     "ready",
+    "assigned",
     "running",
+    "handoff_needed",
+    "cooldown_wait",
+    "validating",
+    "integrating",
     "review",
     "blocked",
     "scheduled",
@@ -22,12 +27,7 @@ class FileTaskBackend:
         self.path = runtime_dir / "state" / "tasks.json"
 
     def list_tasks(self) -> list[dict[str, Any]]:
-        if not self.path.exists():
-            return []
-        payload = json.loads(self.path.read_text(encoding="utf-8"))
-        if not isinstance(payload, list):
-            raise RuntimeError(f"Invalid task state: {self.path}")
-        return [item for item in payload if isinstance(item, dict)]
+        return self.list_tasks_compat()
 
     def save_tasks(self, tasks: list[dict[str, Any]]) -> None:
         atomic_write_json(self.path, {"tasks": tasks})

@@ -40,14 +40,41 @@ def default_project_payload(repository_root: Path) -> dict[str, object]:
             "approval_required": True,
             "allow_fallback": False,
         },
+        "hermes": {
+            "primary_model": "Claude Opus 4.6 (Thinking)",
+            "fallback_model": None,
+            "allow_fallback": False,
+        },
+        "providers": {
+            "codex": {
+                "priority": 10,
+                "capabilities": ["code", "tests", "review"],
+                "cooldown_seconds": 3600,
+            },
+            "antigravity": {
+                "priority": 20,
+                "capabilities": ["code", "analysis", "planning"],
+                "cooldown_seconds": 3600,
+            },
+            "composer": {
+                "priority": 30,
+                "capabilities": ["code", "ui", "repair"],
+                "cooldown_seconds": 3600,
+            },
+        },
         "workers": {
             "concurrency": 3,
             "providers": ["codex", "antigravity", "composer"],
+        },
+        "execution": {
+            "require_plan_approval": True,
+            "preserve_partial_work_on_handoff": True,
         },
         "integration": {
             "serialized": True,
             "rollback_on_validation_failure": True,
         },
+        "monitoring": {"git_graph": True},
         "runtime": {"directory": ".lfg-runtime"},
     }
 
