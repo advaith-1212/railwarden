@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from lfg.config.models import ProjectConfig, WorkPackage
-from lfg.git import branch_exists, branch_is_ancestor, head, is_clean
+from lfg.git import branch_exists, branch_is_ancestor, head, output, tracked_is_clean
 from lfg.scheduler.dag import validate_dag
 from lfg.tasks.file_backend import ACTIVE_TASK_STATES, FileTaskBackend
 
@@ -41,6 +41,25 @@ def package_worktree(config: ProjectConfig, package: WorkPackage) -> Path:
     return config.worktree_root / package.package_id.lower().replace("-", "")
 
 
+def branch_has_new_commits(
+    repository: Path, branch: str, base_branch: str = "main"
+) -> bool:
+    if not branch_exists(repository, branch):
+        return False
+    try:
+        # Try comparing to base_branch (e.g. main)
+        res = output(repository, "log", "--oneline", f"{base_branch}..{branch}")
+        return res.strip() != ""
+    except Exception:
+        try:
+            # Fallback to compare against the parent of the branch branching point
+            b_base = output(repository, "merge-base", branch, "integration/lfg")
+            res = output(repository, "log", "--oneline", f"{b_base}..{branch}")
+            return res.strip() != ""
+        except Exception:
+            return False
+
+
 def classify_packages(
     config: ProjectConfig,
     packages: dict[str, WorkPackage],
@@ -55,6 +74,10 @@ def classify_packages(
         for package_id, package in packages.items()
         if branch_exists(
             config.repository_root, overrides.get(package_id, package_branch(package))
+        )
+        and branch_has_new_commits(
+            config.repository_root,
+            overrides.get(package_id, package_branch(package)),
         )
         and branch_is_ancestor(
             config.repository_root,
@@ -71,7 +94,11 @@ def classify_packages(
             if branch_exists(config.repository_root, branch)
             else None
         )
-        dirty = worktree.is_dir() and not is_clean(worktree)
+        dirty = worktree.is_dir() and not tracked_is_clean(worktree)
+        has_commits = branch_head is not None and branch_has_new_commits(
+            config.repository_root,
+            branch,
+        )
         task = tasks.task_for_package(package_id)
         task_id = str(task["id"]) if task and task.get("id") else None
         task_status = str(task["status"]) if task and task.get("status") else None
@@ -89,13 +116,13 @@ def classify_packages(
         elif task_status in ACTIVE_TASK_STATES:
             state = "active"
             detail = f"Task is currently {task_status}."
-        elif branch_head is not None and unmet:
+        elif has_commits and unmet:
             state = "integration_blocked"
             detail = (
                 "Branch has unmerged commits but dependencies are not merged: "
                 + ", ".join(unmet)
             )
-        elif branch_head is not None:
+        elif has_commits:
             state = "integration_ready"
             detail = "Branch has commits ready for serialized integration."
         elif not unmet:

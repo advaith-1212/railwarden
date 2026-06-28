@@ -3,7 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from lfg.errors import GitError
-from lfg.git import branch_exists, current_branch, is_clean, run_git, worktree_entries
+from lfg.git import (
+    branch_exists,
+    current_branch,
+    run_git,
+    tracked_is_clean,
+    worktree_entries,
+)
 
 
 def is_registered_worktree(repository: Path, workspace: Path) -> bool:
@@ -34,7 +40,7 @@ def ensure_worktree(
             raise GitError(
                 f"Worktree {workspace} is on {actual_branch!r}, expected {branch!r}"
             )
-        dirty = not is_clean(workspace)
+        dirty = not tracked_is_clean(workspace)
         if dirty and action != "repair":
             raise GitError(
                 f"Execution worktree is dirty and cannot be reused safely: {workspace}"

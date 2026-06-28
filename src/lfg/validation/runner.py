@@ -72,24 +72,34 @@ def run_validation_command(
 ) -> ValidationResult:
     cwd = resolve_cwd(repository, command.cwd)
     started = time.monotonic()
-    completed = subprocess.run(
-        list(command.argv),
-        cwd=cwd,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            list(command.argv),
+            cwd=cwd,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        status = "passed" if completed.returncode == 0 else "failed"
+        returncode = completed.returncode
+        stdout = completed.stdout
+        stderr = completed.stderr
+    except OSError as exc:
+        status = "failed"
+        returncode = 127
+        stdout = ""
+        stderr = f"Failed to execute command: {exc}"
     duration = time.monotonic() - started
     return ValidationResult(
         name=command.name,
         command=command.argv,
         cwd=str(command.cwd),
         required=command.required,
-        status="passed" if completed.returncode == 0 else "failed",
-        returncode=completed.returncode,
+        status=status,
+        returncode=returncode,
         duration_seconds=round(duration, 3),
-        stdout=completed.stdout,
-        stderr=completed.stderr,
+        stdout=stdout,
+        stderr=stderr,
     )
 
 

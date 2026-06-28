@@ -22,14 +22,38 @@ from lfg.hermes.mailbox import (
     parse_directive,
     read_messages,
 )
+from lfg.hermes.profile import generate_hermes_profile
 from lfg.integration.manager import integrate_one
+from lfg.mcp.server import serve as serve_mcp
 from lfg.migration.tmom import dry_run_tmom_adoption
+from lfg.models.registry import list_models, validate_model_refs
 from lfg.planning.antigravity import AntigravityClaudePlanner
 from lfg.planning.pipeline import approve_latest_plan, create_pending_plan
 from lfg.providers.adapters import default_adapters
+from lfg.runtime.checkpoints import create_checkpoint_commit
+from lfg.runtime.doctor import doctor_report
 from lfg.runtime.events import read_events
+from lfg.runtime.handoff import create_handoff_packet
+from lfg.runtime.model_refs import parse_model_ref
+from lfg.runtime.quota import load_quota, update_usage
+from lfg.runtime.secrets import ensure_runtime_secrets_file
+from lfg.runtime.session import (
+    AgentInstance,
+    QuotaPolicy,
+    SessionProfile,
+    load_session_profile,
+    model_profile_from_ref,
+    save_session_profile,
+    update_agent,
+)
 from lfg.runtime.tasks import load_tasks, transition_task
-from lfg.scheduler.classifier import classify_packages, execution_plan
+from lfg.runtime.workflow import advance_workflow, load_workflow
+from lfg.scheduler.classifier import (
+    classify_packages,
+    execution_plan,
+    package_branch,
+    package_worktree,
+)
 from lfg.scheduler.dag import Dag
 from lfg.tmux.session import create_session, panes, session_name, stop_session
 
@@ -128,6 +152,170 @@ def cmd_start(args: argparse.Namespace) -> int:
     return 0
 
 
+def _prompt(default: str, label: str) -> str:
+    if not sys.stdin.isatty():
+        return default
+    value = input(f"{label} [{default}]: ").strip()
+    return value or default
+
+
+def _prompt_float(default: float, label: str) -> float:
+    return float(_prompt(str(default), label))
+
+
+def _prompt_bool(default: bool, label: str) -> bool:
+    value = _prompt("yes" if default else "no", label).lower()
+    if value in {"1", "true", "yes", "y"}:
+        return True
+    if value in {"0", "false", "no", "n"}:
+        return False
+    raise LfgError(f"Expected yes/no for {label}")
+
+
+def _prompt_optional_int(default: int | None, label: str) -> int | None:
+    value = _prompt("" if default is None else str(default), label)
+    return int(value) if value else None
+
+
+def _agent_with_model_and_policy(
+    agent: AgentInstance,
+    *,
+    model_ref: str,
+    quota_policy: QuotaPolicy,
+) -> AgentInstance:
+    return AgentInstance(
+        agent_id=agent.agent_id,
+        role=agent.role,
+        model_profile=model_profile_from_ref(model_ref),
+        executor_adapter=agent.executor_adapter,
+        state=agent.state,
+        quota_policy=quota_policy,
+        active_task=agent.active_task,
+    )
+
+
+def _build_launch_profile(
+    profile: SessionProfile, *, name: str | None
+) -> SessionProfile:
+    profile_name = name or _prompt(profile.name, "Session profile")
+    orchestrator_ref = _prompt(
+        profile.orchestrator.model_profile.model_ref,
+        "Hermes orchestrator model ref",
+    )
+    architect_ref = _prompt(
+        profile.architect.model_profile.model_ref, "Architect model ref"
+    )
+    worker_refs = [
+        _prompt(worker.model_profile.model_ref, f"{worker.agent_id} model ref")
+        for worker in profile.workers
+    ]
+    reviewer_ref = (
+        _prompt(profile.reviewer.model_profile.model_ref, "Reviewer model ref")
+        if profile.reviewer is not None
+        else None
+    )
+    validator_ref = (
+        _prompt(profile.validator.model_profile.model_ref, "Validator model ref")
+        if profile.validator is not None
+        else None
+    )
+    budget_label = _prompt(profile.budget_label, "Budget label")
+    fallback_policy = _prompt(profile.fallback_policy, "Fallback/swap policy")
+    default_policy = profile.orchestrator.quota_policy
+    quota_policy = QuotaPolicy(
+        warning_threshold_percent=_prompt_float(
+            default_policy.warning_threshold_percent,
+            "Quota warning threshold percent",
+        ),
+        pause_threshold_percent=_prompt_float(
+            default_policy.pause_threshold_percent,
+            "Quota pause threshold percent",
+        ),
+        hard_stop_below_pause=_prompt_bool(
+            default_policy.hard_stop_below_pause,
+            "Hard stop below pause threshold",
+        ),
+        manual_token_limit=_prompt_optional_int(
+            default_policy.manual_token_limit,
+            "Manual token budget limit",
+        ),
+    )
+    workers = tuple(
+        _agent_with_model_and_policy(
+            worker,
+            model_ref=worker_refs[index],
+            quota_policy=quota_policy,
+        )
+        for index, worker in enumerate(profile.workers)
+    )
+    return SessionProfile(
+        name=profile_name,
+        project=profile.project,
+        created_at=profile.created_at,
+        updated_at=time.time(),
+        orchestrator=_agent_with_model_and_policy(
+            profile.orchestrator,
+            model_ref=orchestrator_ref,
+            quota_policy=quota_policy,
+        ),
+        architect=_agent_with_model_and_policy(
+            profile.architect,
+            model_ref=architect_ref,
+            quota_policy=quota_policy,
+        ),
+        workers=workers,
+        reviewer=_agent_with_model_and_policy(
+            profile.reviewer,
+            model_ref=reviewer_ref,
+            quota_policy=quota_policy,
+        )
+        if profile.reviewer is not None and reviewer_ref is not None
+        else None,
+        validator=_agent_with_model_and_policy(
+            profile.validator,
+            model_ref=validator_ref,
+            quota_policy=quota_policy,
+        )
+        if profile.validator is not None and validator_ref is not None
+        else None,
+        fallback_policy=fallback_policy,
+        budget_label=budget_label,
+    )
+
+
+def cmd_launch(args: argparse.Namespace) -> int:
+    _, files = configured_project(Path.cwd())
+    profile = load_session_profile(files.project)
+    profile = _build_launch_profile(profile, name=args.profile)
+    save_session_profile(files.project, profile)
+    hermes_profile = generate_hermes_profile(files.project, profile)
+    advance_workflow(
+        files.project.runtime_directory,
+        "goal_received",
+        payload={"session_profile": profile.name},
+    )
+    name = create_session(
+        files.project,
+        attach=not args.no_attach,
+        profile=profile,
+        hermes_profile=hermes_profile,
+    )
+    print(
+        json.dumps(
+            {
+                "session": name,
+                "profile": str(
+                    files.project.runtime_directory / "state" / "session-profile.json"
+                ),
+                "hermes": hermes_profile.to_dict(),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
 def cmd_attach(_args: argparse.Namespace) -> int:
     _, files = configured_project(Path.cwd())
     name = session_name(files.project)
@@ -149,6 +337,29 @@ def cmd_status(_args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_observability(_args: argparse.Namespace) -> int:
+    _, files = configured_project(Path.cwd())
+    workflow = load_workflow(files.project.runtime_directory)
+    profile = load_session_profile(files.project)
+    payload = {
+        "dashboard": render_dashboard(files),
+        "workflow": workflow.__dict__,
+        "agents": [
+            {
+                "agent_id": agent.agent_id,
+                "role": agent.role,
+                "state": agent.state,
+                "model_ref": agent.model_profile.model_ref,
+                "quota": load_quota(files.project.runtime_directory, agent).__dict__,
+            }
+            for agent in profile.agents
+        ],
+        "tmux": {"session": session_name(files.project), "panes": panes(files.project)},
+    }
+    print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    return 0
+
+
 def cmd_dashboard(_args: argparse.Namespace) -> int:
     _, files = configured_project(Path.cwd())
     print(render_dashboard(files), end="")
@@ -157,29 +368,24 @@ def cmd_dashboard(_args: argparse.Namespace) -> int:
 
 def cmd_events(args: argparse.Namespace) -> int:
     _, files = configured_project(Path.cwd())
-    print(json.dumps(read_events(files.project.runtime_directory, limit=args.limit), indent=2))
+    print(
+        json.dumps(
+            read_events(files.project.runtime_directory, limit=args.limit), indent=2
+        )
+    )
     return 0
 
 
 def cmd_doctor(_args: argparse.Namespace) -> int:
     _, files = configured_project(Path.cwd())
     adapters = default_adapters()
-    provider_status = {
-        name: adapters[name].health_check()
-        for name in files.project.worker_providers
-        if name in adapters
-    }
     planner = AntigravityClaudePlanner(files.project.planner_model).doctor()
-    payload = {
-        "providers": provider_status,
-        "planning_architect": planner.__dict__,
-        "coordination": {
-            "agent": "Hermes",
-            "mailbox": str(
-                files.project.runtime_directory / "state" / "hermes-mailbox.jsonl"
-            ),
-        },
-    }
+    payload = doctor_report(files.project, adapters=adapters)
+    payload["planning_architect"] = planner.__dict__
+    payload["coordination"]["agent"] = "Hermes"
+    payload["coordination"]["mailbox"] = str(
+        files.project.runtime_directory / "state" / "hermes-mailbox.jsonl"
+    )
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
 
@@ -216,13 +422,285 @@ def cmd_handoff(args: argparse.Namespace) -> int:
     _, files = configured_project(Path.cwd())
     tasks = load_tasks(files.project.runtime_directory)
     for task in tasks:
-        if str(task.get("id")) == args.task_id or str(task.get("package_id")) == args.task_id:
+        if (
+            str(task.get("id")) == args.task_id
+            or str(task.get("package_id")) == args.task_id
+        ):
             payload: dict[str, object] = {"manual": True}
             if args.provider:
                 payload["provider_override"] = args.provider
-            transition_task(files.project.runtime_directory, task, "handoff_needed", payload)
+            transition_task(
+                files.project.runtime_directory, task, "handoff_needed", payload
+            )
             print(f"Marked {task.get('id')} for handoff.")
             return 0
+    raise LfgError(f"Unknown task: {args.task_id}")
+
+
+def cmd_model_list(_args: argparse.Namespace) -> int:
+    print(json.dumps(list_models(), indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_model_doctor(_args: argparse.Namespace) -> int:
+    _, files = configured_project(Path.cwd())
+    profile = load_session_profile(files.project)
+    refs = [agent.model_profile.model_ref for agent in profile.agents]
+    print(json.dumps(validate_model_refs(refs), indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_model_configure(args: argparse.Namespace) -> int:
+    _, files = configured_project(Path.cwd())
+    if args.model_ref:
+        parse_model_ref(args.model_ref)
+    path = ensure_runtime_secrets_file(files.project.runtime_directory)
+    print(json.dumps({"secrets_env": str(path), "model_ref": args.model_ref}, indent=2))
+    return 0
+
+
+def _find_agent(profile: SessionProfile, agent_id: str) -> AgentInstance:
+    for agent in profile.agents:
+        if agent.agent_id == agent_id:
+            return agent
+    raise LfgError(f"Unknown agent: {agent_id}")
+
+
+def _current_goal(runtime_dir: Path) -> str:
+    path = runtime_dir / "state" / "pending-plan.json"
+    if not path.exists():
+        return ""
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return str(payload.get("goal", "")) if isinstance(payload, dict) else ""
+
+
+def _active_task_for_agent(
+    tasks: list[dict[str, Any]], agent: AgentInstance
+) -> dict[str, Any] | None:
+    if agent.active_task:
+        for task in tasks:
+            if str(task.get("id")) == agent.active_task:
+                return task
+    active_statuses = {
+        "assigned",
+        "running",
+        "handoff_needed",
+        "cooldown_wait",
+        "validating",
+    }
+    for task in tasks:
+        if (
+            str(task.get("provider")) == agent.executor_adapter
+            and str(task.get("status")) in active_statuses
+        ):
+            return task
+    return None
+
+
+def _create_swap_handoff(
+    files: Any,
+    task: dict[str, Any],
+    agent: AgentInstance,
+    *,
+    target_provider: str,
+) -> dict[str, Any]:
+    package = files.packages.get(str(task.get("package_id", "")))
+    if package is None:
+        raise LfgError(f"Task package is not available: {task.get('id')}")
+    workspace = Path(
+        str(task.get("worktree", package_worktree(files.project, package)))
+    )
+    branch = str(task.get("branch", package_branch(package)))
+    checkpoint: dict[str, object] | None = None
+    if workspace.exists():
+        try:
+            checkpoint = create_checkpoint_commit(
+                files.project,
+                task_id=str(task["id"]),
+                workspace=workspace,
+                attempt=int(task.get("attempt", 0)),
+                allowed_paths=package.owned_paths,
+            ).to_dict()
+        except LfgError:
+            checkpoint = None
+    packet = create_handoff_packet(
+        runtime_dir=files.project.runtime_directory,
+        task=task,
+        goal=_current_goal(files.project.runtime_directory),
+        objective=package.objective,
+        workspace=workspace,
+        branch=branch,
+        provider=agent.executor_adapter,
+        failure_kind="agent_swap",
+        log_path=Path(str(task["log_path"])) if task.get("log_path") else None,
+        next_provider=target_provider,
+    )
+    payload: dict[str, Any] = {
+        "handoff_packet": str(packet),
+        "last_provider": agent.executor_adapter,
+        "provider_override": target_provider,
+        "failure_kind": "agent_swap",
+    }
+    if checkpoint is not None:
+        payload["checkpoint"] = checkpoint
+    return transition_task(
+        files.project.runtime_directory,
+        task,
+        "handoff_needed",
+        payload,
+    )
+
+
+def cmd_agent_list(_args: argparse.Namespace) -> int:
+    _, files = configured_project(Path.cwd())
+    profile = load_session_profile(files.project)
+    print(
+        json.dumps(
+            [
+                {
+                    "agent_id": agent.agent_id,
+                    "role": agent.role,
+                    "state": agent.state,
+                    "executor_adapter": agent.executor_adapter,
+                    "model_ref": agent.model_profile.model_ref,
+                    "active_task": agent.active_task,
+                }
+                for agent in profile.agents
+            ],
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def cmd_agent_swap(args: argparse.Namespace) -> int:
+    _, files = configured_project(Path.cwd())
+    profile = load_session_profile(files.project)
+    agent = _find_agent(profile, args.agent_id)
+    model_profile = model_profile_from_ref(args.to)
+    target_provider = (
+        model_profile.provider
+        if model_profile.provider in files.project.worker_providers
+        else agent.executor_adapter
+    )
+    tasks = load_tasks(files.project.runtime_directory)
+    active_task = _active_task_for_agent(tasks, agent)
+    updated_task = (
+        _create_swap_handoff(
+            files,
+            active_task,
+            agent,
+            target_provider=target_provider,
+        )
+        if active_task is not None
+        else None
+    )
+    updated = AgentInstance(
+        agent_id=agent.agent_id,
+        role=agent.role,
+        model_profile=model_profile,
+        executor_adapter=target_provider,
+        state="handoff_needed" if updated_task is not None else "ready",
+        quota_policy=agent.quota_policy,
+        active_task=str(updated_task["id"]) if updated_task is not None else None,
+    )
+    save_session_profile(files.project, update_agent(profile, updated))
+    advance_workflow(
+        files.project.runtime_directory,
+        "recovery_or_swap",
+        payload={"agent_id": args.agent_id, "to": args.to},
+    )
+    print(
+        json.dumps(
+            {
+                "agent_id": updated.agent_id,
+                "model_ref": updated.model_profile.model_ref,
+                "executor_adapter": updated.executor_adapter,
+                "task_id": updated_task.get("id") if updated_task else None,
+                "handoff_packet": updated_task.get("handoff_packet")
+                if updated_task
+                else None,
+            },
+            indent=2,
+        )
+    )
+    return 0
+
+
+def cmd_agent_state(args: argparse.Namespace, state: str) -> int:
+    _, files = configured_project(Path.cwd())
+    profile = load_session_profile(files.project)
+    agent = _find_agent(profile, args.agent_id)
+    updated = AgentInstance(
+        agent_id=agent.agent_id,
+        role=agent.role,
+        model_profile=agent.model_profile,
+        executor_adapter=agent.executor_adapter,
+        state=state,  # type: ignore[arg-type]
+        quota_policy=agent.quota_policy,
+        active_task=agent.active_task,
+    )
+    save_session_profile(files.project, update_agent(profile, updated))
+    print(json.dumps({"agent_id": updated.agent_id, "state": updated.state}, indent=2))
+    return 0
+
+
+def cmd_quota_status(_args: argparse.Namespace) -> int:
+    _, files = configured_project(Path.cwd())
+    profile = load_session_profile(files.project)
+    print(
+        json.dumps(
+            [
+                {
+                    "agent_id": agent.agent_id,
+                    **load_quota(files.project.runtime_directory, agent).__dict__,
+                }
+                for agent in profile.agents
+            ],
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def cmd_quota_set(args: argparse.Namespace) -> int:
+    _, files = configured_project(Path.cwd())
+    profile = load_session_profile(files.project)
+    agent = _find_agent(profile, args.agent_id)
+    quota = update_usage(
+        files.project.runtime_directory,
+        agent,
+        remaining_percent=args.remaining_percent,
+        confidence="manual",
+    )
+    print(json.dumps(quota.__dict__, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_checkpoint_create(args: argparse.Namespace) -> int:
+    _, files = configured_project(Path.cwd())
+    tasks = load_tasks(files.project.runtime_directory)
+    for task in tasks:
+        if (
+            str(task.get("id")) != args.task_id
+            and str(task.get("package_id")) != args.task_id
+        ):
+            continue
+        package = files.packages[str(task["package_id"])]
+        workspace = Path(
+            str(task.get("worktree", package_worktree(files.project, package)))
+        )
+        result = create_checkpoint_commit(
+            files.project,
+            task_id=str(task["id"]),
+            workspace=workspace,
+            attempt=int(task.get("attempt", 0)),
+            allowed_paths=package.owned_paths,
+        )
+        print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+        return 0
     raise LfgError(f"Unknown task: {args.task_id}")
 
 
@@ -253,7 +731,9 @@ def cmd_worker(args: argparse.Namespace) -> int:
 def cmd_hermes(_args: argparse.Namespace) -> int:
     _, files = configured_project(Path.cwd())
     print("LFG Hermes console.")
-    print("Commands: goal <text>, approve plan, status, dag, agents, tasks, logs, pause, resume, stop-after-current, quit")
+    print(
+        "Commands: goal <text>, approve plan, status, dag, agents, tasks, logs, pause, resume, stop-after-current, quit"
+    )
     print(
         "Route messages with `codex: ...`, `gemini: ...`, `composer: ...`, or `broadcast: ...`."
     )
@@ -265,8 +745,12 @@ def cmd_hermes(_args: argparse.Namespace) -> int:
         if line in {"quit", "exit"}:
             return 0
         if line.startswith("goal "):
-            pending = create_pending_plan(files.project, line.removeprefix("goal ").strip())
-            print(f"Created pending plan {pending.run_id}. Run `approve plan` to execute.")
+            pending = create_pending_plan(
+                files.project, line.removeprefix("goal ").strip()
+            )
+            print(
+                f"Created pending plan {pending.run_id}. Run `approve plan` to execute."
+            )
         elif line == "approve plan":
             payload = approve_latest_plan(files.project)
             print(f"Approved plan {payload['run_id']}.")
@@ -284,12 +768,19 @@ def cmd_hermes(_args: argparse.Namespace) -> int:
             print(f"Recorded {line}.")
         elif line.startswith("handoff "):
             parts = line.split()
-            cmd_handoff(argparse.Namespace(task_id=parts[1], provider=parts[2] if len(parts) > 2 else None))
+            cmd_handoff(
+                argparse.Namespace(
+                    task_id=parts[1], provider=parts[2] if len(parts) > 2 else None
+                )
+            )
         elif line.startswith("retry ") or line.startswith("unblock "):
             task_id = line.split()[1]
             tasks = load_tasks(files.project.runtime_directory)
             for task in tasks:
-                if str(task.get("id")) == task_id or str(task.get("package_id")) == task_id:
+                if (
+                    str(task.get("id")) == task_id
+                    or str(task.get("package_id")) == task_id
+                ):
                     transition_task(files.project.runtime_directory, task, "ready")
                     print(f"Marked {task.get('id')} ready.")
                     break
@@ -297,8 +788,16 @@ def cmd_hermes(_args: argparse.Namespace) -> int:
             task_id = line.split()[1]
             tasks = load_tasks(files.project.runtime_directory)
             for task in tasks:
-                if str(task.get("id")) == task_id or str(task.get("package_id")) == task_id:
-                    transition_task(files.project.runtime_directory, task, "blocked", {"manual": True})
+                if (
+                    str(task.get("id")) == task_id
+                    or str(task.get("package_id")) == task_id
+                ):
+                    transition_task(
+                        files.project.runtime_directory,
+                        task,
+                        "blocked",
+                        {"manual": True},
+                    )
                     print(f"Blocked {task.get('id')}.")
                     break
         elif directive := parse_directive(line):
@@ -338,6 +837,12 @@ def cmd_integrate(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_mcp(args: argparse.Namespace) -> int:
+    if args.mcp_command != "serve":
+        raise LfgError("Only `lfg mcp serve` is supported")
+    return serve_mcp(Path.cwd())
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="lfg")
     parser.add_argument("--version", action="store_true", help="Show version and exit.")
@@ -356,6 +861,7 @@ def build_parser() -> argparse.ArgumentParser:
         ("replan", cmd_plan),
         ("status", cmd_status),
         ("dashboard", cmd_dashboard),
+        ("observability", cmd_observability),
         ("logs", cmd_logs),
         ("doctor", cmd_doctor),
         ("config", cmd_config),
@@ -374,6 +880,10 @@ def build_parser() -> argparse.ArgumentParser:
     start = sub.add_parser("start")
     start.add_argument("--no-attach", action="store_true")
     start.set_defaults(func=cmd_start)
+    launch = sub.add_parser("launch")
+    launch.add_argument("--profile")
+    launch.add_argument("--no-attach", action="store_true")
+    launch.set_defaults(func=cmd_launch)
     sub.add_parser("attach").set_defaults(func=cmd_attach)
     sub.add_parser("stop").set_defaults(func=cmd_stop)
     restart = sub.add_parser("restart")
@@ -395,6 +905,41 @@ def build_parser() -> argparse.ArgumentParser:
     worker = sub.add_parser("worker")
     worker.add_argument("provider")
     worker.set_defaults(func=cmd_worker)
+    model = sub.add_parser("model")
+    model_sub = model.add_subparsers(dest="model_command", required=True)
+    model_sub.add_parser("list").set_defaults(func=cmd_model_list)
+    model_sub.add_parser("doctor").set_defaults(func=cmd_model_doctor)
+    configure = model_sub.add_parser("configure")
+    configure.add_argument("model_ref", nargs="?")
+    configure.set_defaults(func=cmd_model_configure)
+    agent = sub.add_parser("agent")
+    agent_sub = agent.add_subparsers(dest="agent_command", required=True)
+    agent_sub.add_parser("list").set_defaults(func=cmd_agent_list)
+    swap = agent_sub.add_parser("swap")
+    swap.add_argument("agent_id")
+    swap.add_argument("--to", required=True)
+    swap.set_defaults(func=cmd_agent_swap)
+    pause = agent_sub.add_parser("pause")
+    pause.add_argument("agent_id")
+    pause.set_defaults(func=lambda args: cmd_agent_state(args, "paused"))
+    resume = agent_sub.add_parser("resume")
+    resume.add_argument("agent_id")
+    resume.set_defaults(func=lambda args: cmd_agent_state(args, "ready"))
+    quota = sub.add_parser("quota")
+    quota_sub = quota.add_subparsers(dest="quota_command", required=True)
+    quota_sub.add_parser("status").set_defaults(func=cmd_quota_status)
+    quota_set = quota_sub.add_parser("set")
+    quota_set.add_argument("agent_id")
+    quota_set.add_argument("--remaining-percent", type=float, required=True)
+    quota_set.set_defaults(func=cmd_quota_set)
+    checkpoint = sub.add_parser("checkpoint")
+    checkpoint_sub = checkpoint.add_subparsers(dest="checkpoint_command", required=True)
+    checkpoint_create = checkpoint_sub.add_parser("create")
+    checkpoint_create.add_argument("task_id")
+    checkpoint_create.set_defaults(func=cmd_checkpoint_create)
+    mcp = sub.add_parser("mcp")
+    mcp.add_argument("mcp_command", choices=["serve"])
+    mcp.set_defaults(func=cmd_mcp)
     sub.add_parser("hermes").set_defaults(func=cmd_hermes)
     sub.add_parser("version").set_defaults(func=lambda _args: print(__version__) or 0)
     return parser

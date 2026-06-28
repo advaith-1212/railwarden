@@ -42,4 +42,3 @@ def read_events(runtime_dir: Path, *, limit: int | None = None) -> list[dict[str
         if isinstance(payload, dict):
             rows.append(payload)
     return rows[-limit:] if limit is not None else rows
-

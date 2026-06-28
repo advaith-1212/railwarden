@@ -58,7 +58,9 @@ def render_dashboard(files: ProjectFiles) -> str:
         status = _task_status(tasks, package_id)
         marker = STATE_MARKERS.get(status, "?")
         deps = ", ".join(package.dependencies) if package.dependencies else "-"
-        lines.append(f"[{marker}] {package_id} {package.name} deps={deps} status={status}")
+        lines.append(
+            f"[{marker}] {package_id} {package.name} deps={deps} status={status}"
+        )
     if not files.packages:
         lines.append("(no work packages)")
     lines.extend(["", "Queue"])

@@ -33,8 +33,12 @@ def create_handoff_packet(
     attempt = int(task.get("attempt", 0))
     path = runtime_dir / "handoffs" / f"{task_id}-{attempt}.md"
     path.parent.mkdir(parents=True, exist_ok=True)
-    diff_summary = run_git(workspace, "diff", "--stat", check=False).stdout.strip()
-    status = status_porcelain(workspace) if workspace.exists() else ""
+    if workspace.exists():
+        diff_summary = run_git(workspace, "diff", "--stat", check=False).stdout.strip()
+        status = status_porcelain(workspace)
+    else:
+        diff_summary = ""
+        status = "worktree not created"
     next_line = (
         f"Continue this task with {next_provider} from the preserved worktree."
         if next_provider
@@ -85,7 +89,11 @@ Failure classification: `{failure_kind}`
     append_event(
         runtime_dir,
         "handoff_packet_created",
-        {"path": str(path), "failure_kind": failure_kind, "next_provider": next_provider},
+        {
+            "path": str(path),
+            "failure_kind": failure_kind,
+            "next_provider": next_provider,
+        },
         task_id=task_id,
     )
     return path

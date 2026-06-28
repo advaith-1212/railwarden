@@ -34,7 +34,10 @@ def _path(root: Path, value: str | None, default: str) -> Path:
 
 
 def load_project_config(repository_root: Path) -> ProjectConfig:
-    payload = _load_yaml(repository_root / ".lfg" / "project.yaml")
+    config_path = repository_root / ".lfg" / "factory.yaml"
+    if not config_path.exists():
+        config_path = repository_root / ".lfg" / "project.yaml"
+    payload = _load_yaml(config_path)
     project = payload.get("project")
     if not isinstance(project, dict):
         raise ConfigurationError("project.yaml must define project mapping")

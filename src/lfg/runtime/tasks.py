@@ -97,4 +97,3 @@ def transition_task(
         task_id=str(task.get("id")),
     )
     return task
-

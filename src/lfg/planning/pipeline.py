@@ -148,7 +148,9 @@ def _extract_mapping(text: str) -> dict[str, Any]:
             continue
         if isinstance(payload, dict):
             return payload
-    raise LfgError("Planner output did not contain structured plan data") from last_error
+    raise LfgError(
+        "Planner output did not contain structured plan data"
+    ) from last_error
 
 
 def _normalize_work_packages(packages: Any) -> list[dict[str, Any]]:
@@ -193,9 +195,7 @@ def parse_planner_output(
     except LfgError:
         payload = _extract_mapping(text)
     plan_markdown = (
-        payload.get("plan_markdown")
-        or payload.get("plan")
-        or default_plan_markdown
+        payload.get("plan_markdown") or payload.get("plan") or default_plan_markdown
     )
     if not isinstance(plan_markdown, str) or not plan_markdown.strip():
         raise LfgError("Planner output requires plan_markdown")
@@ -296,7 +296,9 @@ def create_pending_plan(
         "used_structuring_pass": used_structuring_pass,
         "structuring_output": structured_output_text if used_structuring_pass else None,
         "structuring_prompt_hash": (
-            hashlib.sha256(build_structuring_prompt(goal, output_text).encode("utf-8")).hexdigest()
+            hashlib.sha256(
+                build_structuring_prompt(goal, output_text).encode("utf-8")
+            ).hexdigest()
             if used_structuring_pass
             else None
         ),
@@ -340,9 +342,9 @@ def approve_latest_plan(config: ProjectConfig) -> dict[str, Any]:
     config_dir = config.repository_root / ".lfg"
     atomic_write_text(
         config_dir / "plan.md",
-        (config.runtime_directory / "runs" / str(payload["run_id"]) / "plan.md").read_text(
-            encoding="utf-8"
-        ),
+        (
+            config.runtime_directory / "runs" / str(payload["run_id"]) / "plan.md"
+        ).read_text(encoding="utf-8"),
     )
     atomic_write_text(
         config_dir / "work_packages.yaml",
@@ -357,12 +359,16 @@ def approve_latest_plan(config: ProjectConfig) -> dict[str, Any]:
                 config.runtime_directory,
                 package_id=str(package["id"]),
                 name=str(package.get("name", package["id"])),
-                dependencies=tuple(str(item) for item in package.get("dependencies", [])),
+                dependencies=tuple(
+                    str(item) for item in package.get("dependencies", [])
+                ),
             )
     payload["approved"] = True
     payload["approved_at"] = time.time()
     atomic_write_json(path, payload)
-    append_event(config.runtime_directory, "plan_approved", {"run_id": payload["run_id"]})
+    append_event(
+        config.runtime_directory, "plan_approved", {"run_id": payload["run_id"]}
+    )
     return payload
 
 
