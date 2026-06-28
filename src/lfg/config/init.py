@@ -134,6 +134,7 @@ def initialize_project(repository_root: Path, *, yes: bool) -> dict[str, str]:
                 ),
             )
         atomic_write_text(config_dir / "state-schema-version", "1.0.0\n")
+        ensure_context_templates(repository_root)
     proposal = ensure_gitignore(repository_root, yes=yes)
     branch = output(repository_root, "branch", "--show-current")
     return {
@@ -141,3 +142,20 @@ def initialize_project(repository_root: Path, *, yes: bool) -> dict[str, str]:
         "branch": branch,
         "gitignore_proposal": proposal,
     }
+
+
+def ensure_context_templates(repository_root: Path) -> None:
+    context_dir = repository_root / "context"
+    context_dir.mkdir(parents=True, exist_ok=True)
+    templates = {
+        "PROJECT_CONTEXT.md": "# Project Context\n\nDescribe the repository, product, and current implementation state.\n",
+        "ARCHITECTURE.md": "# Architecture\n\nRecord stable architectural decisions and boundaries.\n",
+        "PRODUCT_INVARIANTS.md": "# Product Invariants\n\nList behavior that work packages must preserve.\n",
+        "SECURITY_MODEL.md": "# Security Model\n\nDocument trust boundaries, secrets, and sensitive operations.\n",
+        "TEST_STRATEGY.md": "# Test Strategy\n\nDocument required checks for package, integration, and release validation.\n",
+        "CONTRIBUTING_AGENTS.md": "# Contributing Agents\n\nDescribe how LFG workers should inspect, edit, validate, and hand off work.\n",
+    }
+    for name, text in templates.items():
+        path = context_dir / name
+        if not path.exists():
+            atomic_write_text(path, text)

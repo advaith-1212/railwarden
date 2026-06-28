@@ -2,8 +2,10 @@
 
 Commands: `setup`, `init`, `launch`, `observe`, `observability`, `model`,
 `agent`, `quota`, `checkpoint`, `mcp serve`, `adopt`, `run`, `approve plan`,
-`plan`, `replan`, `controller`, `dashboard`, `handoff`, `events`, `integrate`,
-`start`, `attach`, `status`, `stop`, `restart`, `logs`, `doctor`, `config`,
+`approve-contracts`, `inspect`, `retry`, `reject`, `approve-merge`,
+`abort-goal`, `validate`, `review`, `release-review`, `plan`, `replan`,
+`controller`, `dashboard`, `handoff`, `events`, `integrate`, `start`,
+`attach`, `status`, `stop`, `restart`, `logs`, `doctor`, `config`, `update`,
 `version`, and default `lfg`.
 
 Running `lfg launch` in a configured repository starts or attaches to the tmux
@@ -23,6 +25,13 @@ prints readable checks for Hermes, tmux, provider CLIs, selected credentials,
 the generated Hermes profile, LFG MCP visibility, and git ignore rules.
 
 `lfg launch` uses the default dev-shop preset unless you pass `--preset` or
-choose `advanced` interactively. `lfg observe` and `lfg observability` render
-the live DAG, workflow state, agents, quotas, tmux panes, provider health,
+choose `advanced` interactively. Worker panes are visible execution shells; the
+controller sends provider CLI commands into them when a tmux session exists.
+`lfg observe` and `lfg observability` render the live DAG, factory lifecycle,
+agents, quotas, tmux panes, provider health, validation/review evidence,
 integration queue, events, and Git graph.
+
+`lfg update` updates the installed global CLI by running `git pull --ff-only`
+in the LFG source checkout and then `uv tool install --editable <checkout>
+--force`. Use `lfg update --source /path/to/lfg` when the running install
+cannot infer the intended source checkout.

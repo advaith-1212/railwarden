@@ -145,6 +145,35 @@ def test_default_session_profile_uses_valid_cli_model_refs(git_repo: Path) -> No
     assert composer.model_profile.model_ref == "composer:grok-composer-2.5-fast"
 
 
+def test_update_command_pulls_and_reinstalls_editable_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[list[str]] = []
+    checkout = tmp_path / "lfg"
+    checkout.mkdir()
+
+    def fake_run(
+        command: list[str],
+        **_kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        if command[:4] == ["git", "-C", str(checkout), "rev-parse"]:
+            return subprocess.CompletedProcess(
+                command, 0, stdout=str(checkout), stderr=""
+            )
+        return subprocess.CompletedProcess(command, 0, stdout="ok\n", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert main(["update", "--source", str(checkout)]) == 0
+
+    assert calls == [
+        ["git", "-C", str(checkout), "rev-parse", "--show-toplevel"],
+        ["git", "-C", str(checkout), "pull", "--ff-only"],
+        ["uv", "tool", "install", "--editable", str(checkout), "--force"],
+    ]
+
+
 def test_secret_redaction_covers_keys_tokens_and_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -184,14 +213,24 @@ def test_mcp_tool_schemas_cover_required_tools() -> None:
         "lfg.goal.submit",
         "lfg.plan.create",
         "lfg.plan.approve",
+        "lfg.plan.show",
+        "lfg.plan.reject",
+        "lfg.contracts.freeze",
         "lfg.task.list",
         "lfg.task.route",
+        "lfg.task.inspect",
+        "lfg.task.retry",
+        "lfg.task.reject",
         "lfg.agent.swap",
         "lfg.agent.pause",
         "lfg.agent.resume",
         "lfg.quota.status",
         "lfg.checkpoint.create",
         "lfg.integration.status",
+        "lfg.validation.run",
+        "lfg.review.run",
+        "lfg.merge.approve",
+        "lfg.goal.abort",
         "lfg.skill.create",
         "lfg.skill.promote",
     } <= names
@@ -236,6 +275,8 @@ def test_tmux_launch_layout_has_factory_and_observability(git_repo: Path) -> Non
     )
     assert any("role=coder exec=codex provider=codex" in spec.title for spec in specs)
     assert any("lfg observability" in spec.command for spec in specs)
+    assert any("LFG worker pane ready: codex-1" in spec.command for spec in specs)
+    assert not any("lfg worker codex" in spec.command for spec in specs)
     assert not any("watch -n 5 lfg observability" in spec.command for spec in specs)
 
 

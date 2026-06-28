@@ -23,7 +23,16 @@ class WorkPackage:
     owned_paths: tuple[str, ...] = ()
     forbidden_paths: tuple[str, ...] = ()
     acceptance_tests: tuple[str, ...] = ()
+    acceptance_criteria: tuple[str, ...] = ()
+    validation_commands: tuple[ValidationCommand, ...] = ()
     preferred_providers: tuple[str, ...] = ()
+    model_profile: str | None = None
+    reviewer_profile: str | None = None
+    risk_level: str = "medium"
+    context_refs: tuple[str, ...] = ()
+    merge_policy: str = "auto_after_review"
+    approval_required: bool = False
+    review_required: bool = True
     branch: str | None = None
     worktree: Path | None = None
     status_notes: str | None = None

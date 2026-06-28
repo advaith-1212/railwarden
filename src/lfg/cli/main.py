@@ -15,7 +15,7 @@ from lfg.config.loader import load_project_files
 from lfg.engine.controller import controller_tick
 from lfg.engine.dashboard import render_dashboard
 from lfg.errors import LfgError
-from lfg.git import discover_repo
+from lfg.git import changed_files_in_commit, discover_repo, head
 from lfg.hermes.mailbox import (
     append_message,
     messages_for,
@@ -56,6 +56,8 @@ from lfg.scheduler.classifier import (
 )
 from lfg.scheduler.dag import Dag
 from lfg.tmux.session import create_session, panes, session_name, stop_session
+from lfg.validation.package import run_package_validation
+from lfg.validation.review import run_package_review
 
 
 def configured_project(start: Path) -> tuple[Path, Any]:
@@ -609,7 +611,7 @@ def cmd_launch(args: argparse.Namespace) -> int:
     hermes_profile = generate_hermes_profile(files.project, profile)
     advance_workflow(
         files.project.runtime_directory,
-        "goal_received",
+        "GOAL_RECEIVED",
         payload={"session_profile": profile.name},
     )
     name = create_session(
@@ -735,6 +737,55 @@ def cmd_config(_args: argparse.Namespace) -> int:
     return 0
 
 
+def _source_checkout_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def _git_toplevel(path: Path) -> Path:
+    completed = subprocess.run(
+        ["git", "-C", str(path), "rev-parse", "--show-toplevel"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise LfgError(
+            "lfg update requires LFG to be installed from a Git checkout. "
+            f"git error: {completed.stderr.strip()}"
+        )
+    return Path(completed.stdout.strip()).resolve()
+
+
+def cmd_update(args: argparse.Namespace) -> int:
+    source = Path(args.source).resolve() if args.source else _source_checkout_root()
+    checkout = _git_toplevel(source)
+    print(f"Updating LFG from: {checkout}")
+    pull = subprocess.run(
+        ["git", "-C", str(checkout), "pull", "--ff-only"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if pull.returncode != 0:
+        raise LfgError(f"git pull failed: {pull.stderr.strip() or pull.stdout.strip()}")
+    if pull.stdout.strip():
+        print(pull.stdout.strip())
+    install = subprocess.run(
+        ["uv", "tool", "install", "--editable", str(checkout), "--force"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if install.returncode != 0:
+        raise LfgError(
+            f"uv tool install failed: {install.stderr.strip() or install.stdout.strip()}"
+        )
+    if install.stdout.strip():
+        print(install.stdout.strip())
+    print(f"LFG updated to {__version__}.")
+    return 0
+
+
 def cmd_logs(_args: argparse.Namespace) -> int:
     _, files = configured_project(Path.cwd())
     log_dir = files.project.runtime_directory / "logs"
@@ -774,6 +825,159 @@ def cmd_handoff(args: argparse.Namespace) -> int:
             print(f"Marked {task.get('id')} for handoff.")
             return 0
     raise LfgError(f"Unknown task: {args.task_id}")
+
+
+def _task_and_package(files: Any, identifier: str) -> tuple[dict[str, Any], Any]:
+    for task in load_tasks(files.project.runtime_directory):
+        if (
+            str(task.get("id")) == identifier
+            or str(task.get("package_id")) == identifier
+        ):
+            package = files.packages.get(str(task.get("package_id", "")))
+            if package is None:
+                raise LfgError(f"Package is not loaded for task: {identifier}")
+            return task, package
+    raise LfgError(f"Unknown task or package: {identifier}")
+
+
+def cmd_inspect(args: argparse.Namespace) -> int:
+    _, files = configured_project(Path.cwd())
+    task, package = _task_and_package(files, args.identifier)
+    print(
+        json.dumps(
+            {"task": task, "package": package.__dict__},
+            indent=2,
+            sort_keys=True,
+            default=str,
+        )
+    )
+    return 0
+
+
+def cmd_retry(args: argparse.Namespace) -> int:
+    _, files = configured_project(Path.cwd())
+    task, _package = _task_and_package(files, args.identifier)
+    updated = transition_task(files.project.runtime_directory, task, "ready")
+    print(f"Marked {updated.get('id')} ready.")
+    return 0
+
+
+def cmd_reject(args: argparse.Namespace) -> int:
+    _, files = configured_project(Path.cwd())
+    task, _package = _task_and_package(files, args.identifier)
+    updated = transition_task(
+        files.project.runtime_directory,
+        task,
+        "rejected",
+        {"reason": args.reason or "manual rejection"},
+    )
+    print(f"Rejected {updated.get('id')}.")
+    return 0
+
+
+def cmd_approve_merge(args: argparse.Namespace) -> int:
+    _, files = configured_project(Path.cwd())
+    task, _package = _task_and_package(files, args.identifier)
+    updated = transition_task(
+        files.project.runtime_directory,
+        task,
+        "merge_approved",
+        {"merge_approved_by": "human", "merge_approved_at": time.time()},
+    )
+    print(f"Approved merge for {updated.get('id')}.")
+    return 0
+
+
+def cmd_approve_contracts(_args: argparse.Namespace) -> int:
+    _, files = configured_project(Path.cwd())
+    payload = approve_latest_plan(files.project)
+    print(f"Approved contracts: {payload['run_id']}")
+    return 0
+
+
+def cmd_abort_goal(args: argparse.Namespace) -> int:
+    _, files = configured_project(Path.cwd())
+    reason = args.reason or "manual abort"
+    for task in load_tasks(files.project.runtime_directory):
+        status = str(task.get("status", ""))
+        if status not in {"merged", "blocked", "failed", "rejected"}:
+            transition_task(
+                files.project.runtime_directory,
+                task,
+                "blocked",
+                {"goal_aborted": True, "reason": reason},
+            )
+    advance_workflow(files.project.runtime_directory, "RECOVERY_OR_SWAP")
+    print(f"Aborted active goal: {reason}")
+    return 0
+
+
+def cmd_validate_package(args: argparse.Namespace) -> int:
+    _, files = configured_project(Path.cwd())
+    task, package = _task_and_package(files, args.identifier)
+    workspace = Path(
+        str(task.get("worktree", package_worktree(files.project, package)))
+    )
+    commit_hash = str(task.get("commit_hash") or head(workspace))
+    evidence = run_package_validation(files.project, package, workspace, commit_hash)
+    transition_task(
+        files.project.runtime_directory,
+        task,
+        "validated" if evidence["status"] == "passed" else "blocked",
+        {"package_validation": evidence},
+    )
+    print(json.dumps(evidence, indent=2, sort_keys=True, default=str))
+    return 0
+
+
+def cmd_review_package(args: argparse.Namespace) -> int:
+    _, files = configured_project(Path.cwd())
+    task, package = _task_and_package(files, args.identifier)
+    workspace = Path(
+        str(task.get("worktree", package_worktree(files.project, package)))
+    )
+    commit_hash = str(task.get("commit_hash") or head(workspace))
+    changed = changed_files_in_commit(workspace, commit_hash)
+    validation = task.get("package_validation")
+    if not isinstance(validation, dict):
+        validation = run_package_validation(
+            files.project, package, workspace, commit_hash
+        )
+    review = run_package_review(
+        files.project,
+        package,
+        task=task,
+        worker_provider=str(task.get("provider", "")),
+        reviewer_provider=args.reviewer,
+        changed_files=changed,
+        validation_evidence=validation,
+    )
+    transition_task(
+        files.project.runtime_directory,
+        task,
+        "review_passed" if review["status"] == "passed" else "blocked",
+        {"review": review},
+    )
+    print(json.dumps(review, indent=2, sort_keys=True, default=str))
+    return 0
+
+
+def cmd_release_review(_args: argparse.Namespace) -> int:
+    _, files = configured_project(Path.cwd())
+    tasks = load_tasks(files.project.runtime_directory)
+    incomplete = [
+        task for task in tasks if str(task.get("status")) not in {"merged", "rejected"}
+    ]
+    status = "passed" if not incomplete else "blocked"
+    payload = {
+        "status": status,
+        "total_tasks": len(tasks),
+        "incomplete": [task.get("id") for task in incomplete],
+    }
+    if status == "passed":
+        advance_workflow(files.project.runtime_directory, "RELEASE_REVIEW")
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0
 
 
 def cmd_model_list(_args: argparse.Namespace) -> int:
@@ -997,7 +1201,7 @@ def cmd_agent_swap(args: argparse.Namespace) -> int:
     save_session_profile(files.project, update_agent(profile, updated))
     advance_workflow(
         files.project.runtime_directory,
-        "recovery_or_swap",
+        "RECOVERY_OR_SWAP",
         payload={"agent_id": args.agent_id, "to": args.to},
     )
     print(
@@ -1143,12 +1347,31 @@ def cmd_hermes(_args: argparse.Namespace) -> int:
             pending = create_pending_plan(
                 files.project, line.removeprefix("goal ").strip()
             )
-            print(
-                f"Created pending plan {pending.run_id}. Run `approve plan` to execute."
-            )
-        elif line == "approve plan":
+            print(f"Created pending plan {pending.run_id}.")
+            print()
+            print(pending.plan_markdown)
+            print("Work packages:")
+            for package in pending.work_packages:
+                print(
+                    f"- {package['id']} {package.get('name', '')} "
+                    f"deps={package.get('dependencies', [])} "
+                    f"risk={package.get('risk_level', 'medium')}"
+                )
+            print()
+            print("Type `approved` or `approve plan` to freeze contracts and execute.")
+        elif line in {"approved", "approve plan", "approve contracts"}:
             payload = approve_latest_plan(files.project)
             print(f"Approved plan {payload['run_id']}.")
+        elif line == "reject plan":
+            path = files.project.runtime_directory / "state" / "pending-plan.json"
+            if path.exists():
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(payload, dict):
+                    payload["approved"] = False
+                    payload["rejected"] = True
+                    payload["rejected_at"] = time.time()
+                    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            print("Rejected pending plan.")
         elif line in {"status", "plan", "dag", "agents", "tasks"}:
             cmd_plan(argparse.Namespace())
         elif line == "logs":
@@ -1168,17 +1391,21 @@ def cmd_hermes(_args: argparse.Namespace) -> int:
                     task_id=parts[1], provider=parts[2] if len(parts) > 2 else None
                 )
             )
+        elif line.startswith("inspect "):
+            cmd_inspect(argparse.Namespace(identifier=line.split()[1]))
+        elif line.startswith("review "):
+            cmd_review_package(
+                argparse.Namespace(identifier=line.split()[1], reviewer=None)
+            )
         elif line.startswith("retry ") or line.startswith("unblock "):
             task_id = line.split()[1]
-            tasks = load_tasks(files.project.runtime_directory)
-            for task in tasks:
-                if (
-                    str(task.get("id")) == task_id
-                    or str(task.get("package_id")) == task_id
-                ):
-                    transition_task(files.project.runtime_directory, task, "ready")
-                    print(f"Marked {task.get('id')} ready.")
-                    break
+            cmd_retry(argparse.Namespace(identifier=task_id))
+        elif line.startswith("reject "):
+            cmd_reject(argparse.Namespace(identifier=line.split()[1], reason=None))
+        elif line.startswith("approve-merge "):
+            cmd_approve_merge(argparse.Namespace(identifier=line.split()[1]))
+        elif line == "abort-goal":
+            cmd_abort_goal(argparse.Namespace(reason=None))
         elif line.startswith("block "):
             task_id = line.split()[1]
             tasks = load_tasks(files.project.runtime_directory)
@@ -1267,6 +1494,12 @@ def build_parser() -> argparse.ArgumentParser:
     ]:
         item = sub.add_parser(name)
         item.set_defaults(func=func)
+    update = sub.add_parser("update")
+    update.add_argument(
+        "--source",
+        help="Override the LFG source checkout to pull and install.",
+    )
+    update.set_defaults(func=cmd_update)
     run = sub.add_parser("run")
     run.add_argument("goal")
     run.set_defaults(func=cmd_run)
@@ -1302,6 +1535,31 @@ def build_parser() -> argparse.ArgumentParser:
     handoff.add_argument("task_id")
     handoff.add_argument("provider", nargs="?")
     handoff.set_defaults(func=cmd_handoff)
+    inspect = sub.add_parser("inspect")
+    inspect.add_argument("identifier")
+    inspect.set_defaults(func=cmd_inspect)
+    retry = sub.add_parser("retry")
+    retry.add_argument("identifier")
+    retry.set_defaults(func=cmd_retry)
+    reject = sub.add_parser("reject")
+    reject.add_argument("identifier")
+    reject.add_argument("--reason")
+    reject.set_defaults(func=cmd_reject)
+    approve_merge = sub.add_parser("approve-merge")
+    approve_merge.add_argument("identifier")
+    approve_merge.set_defaults(func=cmd_approve_merge)
+    sub.add_parser("approve-contracts").set_defaults(func=cmd_approve_contracts)
+    abort_goal = sub.add_parser("abort-goal")
+    abort_goal.add_argument("--reason")
+    abort_goal.set_defaults(func=cmd_abort_goal)
+    validate = sub.add_parser("validate")
+    validate.add_argument("identifier")
+    validate.set_defaults(func=cmd_validate_package)
+    review = sub.add_parser("review")
+    review.add_argument("identifier")
+    review.add_argument("--reviewer")
+    review.set_defaults(func=cmd_review_package)
+    sub.add_parser("release-review").set_defaults(func=cmd_release_review)
     worker = sub.add_parser("worker")
     worker.add_argument("provider")
     worker.set_defaults(func=cmd_worker)

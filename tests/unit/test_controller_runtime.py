@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -85,6 +86,97 @@ def test_dashboard_renders_runtime_state(git_repo: Path) -> None:
     assert "LFG Dashboard" in dashboard
     assert "WP-1" in dashboard
     assert "Providers" in dashboard
+
+
+def test_controller_runs_lfg_validation_and_review_before_merge(
+    git_repo: Path,
+) -> None:
+    initialize_project(git_repo, yes=True)
+    project_path = git_repo / ".lfg" / "project.yaml"
+    project = yaml.safe_load(project_path.read_text(encoding="utf-8"))
+    project["project"]["integration_branch"] = "main"
+    project_path.write_text(yaml.safe_dump(project), encoding="utf-8")
+    (git_repo / ".lfg" / "work_packages.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": "2.0.0",
+                "work_packages": [
+                    {
+                        "id": "WP-1",
+                        "name": "Validated package",
+                        "objective": "Do work",
+                        "owned_paths": ["app"],
+                        "preferred_providers": ["codex"],
+                        "validation_commands": [
+                            {
+                                "name": "package-check",
+                                "command": {
+                                    "cwd": ".",
+                                    "argv": ["python3", "-c", "print('ok')"],
+                                },
+                            }
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    _approve(git_repo)
+    files = load_project_files(git_repo)
+    controller_tick(files, launch=False, integrate=False)
+    task = load_tasks(files.project.runtime_directory)[0]
+    workspace = Path(str(task["worktree"]))
+    (workspace / "app").mkdir()
+    (workspace / "app" / "result.txt").write_text("done\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(workspace), "add", "app/result.txt"], check=True)
+    subprocess.run(
+        ["git", "-C", str(workspace), "commit", "-m", "implement wp1"],
+        check=True,
+        capture_output=True,
+    )
+    commit = subprocess.run(
+        ["git", "-C", str(workspace), "rev-parse", "HEAD"],
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.strip()
+    result_path = Path(str(task["result_path"]))
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    result_path.write_text(
+        json.dumps(
+            {
+                "task_id": "task-WP-1",
+                "worker": "codex",
+                "model": "gpt-5.5",
+                "status": "completed",
+                "summary": "done",
+                "workspace": str(workspace),
+                "branch": task["branch"],
+                "commit_hash": commit,
+                "changed_files": ["app/result.txt"],
+                "tests": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    task["status"] = "running"
+    save_tasks(files.project.runtime_directory, [task])
+    process_path = files.project.runtime_directory / "processes" / "task-WP-1.json"
+    process_path.parent.mkdir(parents=True, exist_ok=True)
+    process_path.write_text(
+        json.dumps({"pid": 0, "provider": "codex", "log_path": ""}),
+        encoding="utf-8",
+    )
+
+    controller_tick(load_project_files(git_repo), launch=False, integrate=False)
+
+    updated = load_tasks(files.project.runtime_directory)[0]
+    assert updated["status"] == "review_passed"
+    assert updated["package_validation"]["status"] == "passed"
+    assert Path(updated["package_validation"]["evidence_path"]).exists()
+    assert updated["review"]["status"] == "passed"
+    assert Path(updated["review"]["evidence_path"]).exists()
 
 
 def test_dead_quota_process_creates_handoff_and_reassigns(git_repo: Path) -> None:

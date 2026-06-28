@@ -10,6 +10,7 @@ from lfg.git import branch_exists, head, is_clean
 from lfg.integration.manager import integrate_one
 from lfg.planning.pipeline import plan_is_approved
 from lfg.processes.supervisor import launch_managed, process_alive
+from lfg.processes.tmux_runner import launch_tmux_managed, pane_for_worker
 from lfg.providers.adapters import ProviderAdapter, default_adapters
 from lfg.providers.health import (
     is_available,
@@ -37,11 +38,14 @@ from lfg.runtime.tasks import (
     task_id_for_package,
     transition_task,
 )
+from lfg.runtime.workflow import advance_workflow
 from lfg.scheduler.classifier import classify_packages, package_branch, package_worktree
+from lfg.validation.package import run_package_validation
+from lfg.validation.review import requires_human_merge_approval, run_package_review
 from lfg.validation.worker_result import load_worker_result, validate_completed_package
 
 TERMINAL_STATES = {"merged", "blocked", "failed"}
-ACTIVE_STATES = {"assigned", "running", "validating", "integrating"}
+ACTIVE_STATES = {"assigned", "running", "validating", "reviewing", "integrating"}
 
 
 def _current_goal(config: ProjectConfig) -> str:
@@ -75,6 +79,10 @@ def _log_path(config: ProjectConfig, task_id: str, attempt: int, provider: str) 
 
 def _prompt_path(config: ProjectConfig, task_id: str, attempt: int) -> Path:
     return config.runtime_directory / "prompts" / f"{task_id}-{attempt}.md"
+
+
+def _tmux_script_path(config: ProjectConfig, task_id: str, attempt: int) -> Path:
+    return config.runtime_directory / "processes" / f"{task_id}-{attempt}.sh"
 
 
 def _write_prompt(
@@ -120,6 +128,21 @@ Forbidden paths:
 
 Acceptance tests:
 {chr(10).join(f"- {item}" for item in package.acceptance_tests) or "- none"}
+
+Acceptance criteria:
+{chr(10).join(f"- {item}" for item in package.acceptance_criteria) or "- none"}
+
+Validation commands:
+{chr(10).join(f"- {command.name}: {' '.join(command.argv)}" for command in package.validation_commands) or "- none"}
+
+Context refs:
+{chr(10).join(f"- {item}" for item in package.context_refs) or "- none"}
+
+Risk / merge policy:
+- risk_level: {package.risk_level}
+- merge_policy: {package.merge_policy}
+- review_required: {package.review_required}
+- approval_required: {package.approval_required}
 
 Workspace: {workspace}
 Expected result JSON path: {result_path}
@@ -197,10 +220,6 @@ def hydrate_task_state(files: ProjectFiles) -> list[dict[str, Any]]:
             continue
         if state.state == "merged":
             transition_task(config.runtime_directory, existing_task, "merged")
-        elif state.state == "integration_ready":
-            transition_task(
-                config.runtime_directory, existing_task, "integration_ready"
-            )
         elif state.state in {"execution_ready", "repair_required"}:
             transition_task(config.runtime_directory, existing_task, "ready")
     return load_tasks(config.runtime_directory)
@@ -293,9 +312,6 @@ def reconcile_processes(files: ProjectFiles) -> list[dict[str, Any]]:
         process = json.loads(process_path.read_text(encoding="utf-8"))
         if not isinstance(process, dict):
             continue
-        pid = int(process.get("pid", 0))
-        if pid > 0 and process_alive(pid):
-            continue
         package = _package_for_task(files, task)
         if package is None:
             transition_task(
@@ -310,6 +326,7 @@ def reconcile_processes(files: ProjectFiles) -> list[dict[str, Any]]:
         )
         if result_path.exists():
             transition_task(config.runtime_directory, task, "validating")
+            advance_workflow(config.runtime_directory, "PACKAGE_VALIDATION")
             result = load_worker_result(result_path)
             worker_status = result.get("status")
             if worker_status == "success":
@@ -322,6 +339,31 @@ def reconcile_processes(files: ProjectFiles) -> list[dict[str, Any]]:
                         result=result,
                         workspace=workspace,
                         expected_branch=branch,
+                    )
+                    commit_hash = str(result.get("commit_hash") or head(workspace))
+                    validation = run_package_validation(
+                        config, package, workspace, commit_hash
+                    )
+                    transition_task(
+                        config.runtime_directory,
+                        task,
+                        "reviewing",
+                        {
+                            "commit_hash": commit_hash,
+                            "package_validation": validation,
+                        },
+                    )
+                    advance_workflow(config.runtime_directory, "PACKAGE_REVIEW")
+                    review = run_package_review(
+                        config,
+                        package,
+                        task=task,
+                        worker_provider=provider,
+                        reviewer_provider=_reviewer_provider_for(
+                            files, package, provider
+                        ),
+                        changed_files=[str(item) for item in result["changed_files"]],
+                        validation_evidence=validation,
                     )
                 except ValidationError as exc:
                     _handoff_or_block(
@@ -336,12 +378,42 @@ def reconcile_processes(files: ProjectFiles) -> list[dict[str, Any]]:
                         log_path=Path(str(process.get("log_path", ""))),
                     )
                     continue
+                if review["status"] != "passed":
+                    findings = review.get("findings", [])
+                    finding_text = (
+                        "; ".join(str(item) for item in findings)
+                        if isinstance(findings, list)
+                        else str(findings)
+                    )
+                    _handoff_or_block(
+                        files,
+                        task,
+                        package,
+                        provider=provider,
+                        failure_text=finding_text,
+                        failure_kind="review_failed",
+                        workspace=workspace,
+                        branch=branch,
+                        log_path=Path(str(process.get("log_path", ""))),
+                    )
+                    continue
                 record_success(config.runtime_directory, provider)
+                next_status = (
+                    "merge_ready"
+                    if requires_human_merge_approval(package)
+                    else "review_passed"
+                )
                 transition_task(
                     config.runtime_directory,
                     task,
-                    "integration_ready",
-                    {"commit_hash": result.get("commit_hash")},
+                    next_status,
+                    {
+                        "commit_hash": result.get("commit_hash"),
+                        "review": review,
+                        "merge_approval_required": requires_human_merge_approval(
+                            package
+                        ),
+                    },
                 )
             elif result.get("status") == "blocked":
                 transition_task(
@@ -354,6 +426,14 @@ def reconcile_processes(files: ProjectFiles) -> list[dict[str, Any]]:
                 transition_task(
                     config.runtime_directory, task, "failed", {"result": result}
                 )
+            continue
+        pid = int(process.get("pid", 0))
+        if pid > 0 and process_alive(pid):
+            continue
+        if process.get("mode") == "tmux" and process.get("status") in {
+            "launching",
+            "running",
+        }:
             continue
         log_path = Path(str(process.get("log_path", "")))
         failure_text = (
@@ -440,12 +520,28 @@ def launch_task(
             active_task=str(task["id"]),
         )
     if launch:
-        managed = launch_managed(
-            command,
-            cwd=workspace,
-            log_path=log_path,
-            pid_path=_process_path(config, str(task["id"])),
+        pane_id = pane_for_worker(
+            config.runtime_directory,
+            agent_id=agent.agent_id if agent is not None else None,
+            provider=provider,
         )
+        if pane_id:
+            managed = launch_tmux_managed(
+                command,
+                cwd=workspace,
+                log_path=log_path,
+                pid_path=_process_path(config, str(task["id"])),
+                script_path=_tmux_script_path(config, str(task["id"]), attempt),
+                pane_id=pane_id,
+                provider=provider,
+            )
+        else:
+            managed = launch_managed(
+                command,
+                cwd=workspace,
+                log_path=log_path,
+                pid_path=_process_path(config, str(task["id"])),
+            )
         process_payload = {
             "pid": managed.pid,
             "pgid": managed.pgid,
@@ -453,6 +549,10 @@ def launch_task(
             "log_path": str(managed.log_path),
             "provider": provider,
         }
+        if pane_id:
+            process_payload.update(
+                {"mode": "tmux", "pane_id": pane_id, "status": "launching"}
+            )
         process_path = _process_path(config, str(task["id"]))
         process_path.write_text(json.dumps(process_payload, indent=2), encoding="utf-8")
         transition_task(config.runtime_directory, task, "running", {"pid": managed.pid})
@@ -488,6 +588,21 @@ def _agent_for_provider(files: ProjectFiles, provider: str) -> AgentInstance | N
         if agent.model_profile.provider == provider:
             return agent
     return None
+
+
+def _reviewer_provider_for(
+    files: ProjectFiles, package: WorkPackage, worker_provider: str
+) -> str:
+    profile = load_session_profile(files.project)
+    if (
+        profile.reviewer is not None
+        and profile.reviewer.executor_adapter != worker_provider
+    ):
+        return profile.reviewer.executor_adapter
+    if package.reviewer_profile and package.reviewer_profile != worker_provider:
+        return package.reviewer_profile
+    providers = eligible_providers(files.project, package, exclude={worker_provider})
+    return providers[0] if providers else "lfg-local-reviewer"
 
 
 def _set_agent_runtime_state(
@@ -597,6 +712,7 @@ def controller_tick(
             task = tasks_by_id.get(task_id)
             if task is not None:
                 transition_task(config.runtime_directory, task, "integrating")
+            advance_workflow(config.runtime_directory, "DEPENDENCY_SAFE_MERGE")
             try:
                 integrated = integrate_one(
                     config=config,
@@ -620,6 +736,7 @@ def controller_tick(
                         "merged",
                         {"integration": integrated},
                     )
+                advance_workflow(config.runtime_directory, "INTEGRATION_VALIDATION")
     tasks = load_tasks(config.runtime_directory)
     running = sum(1 for task in tasks if str(task.get("status")) in ACTIVE_STATES)
     slots = max(config.worker_concurrency - running, 0)
@@ -683,11 +800,16 @@ def controller_tick(
             )
             continue
         launched.append({"task_id": task["id"], "provider": provider})
+        advance_workflow(config.runtime_directory, "WORK_EXECUTING")
         slots -= 1
     return {"status": "ok", "launched": launched, "integrated": integrated}
 
 
 def integration_candidates(files: ProjectFiles) -> list[dict[str, Any]]:
+    tasks_by_package = {
+        str(task.get("package_id")): task
+        for task in load_tasks(files.project.runtime_directory)
+    }
     states = classify_packages(files.project, files.packages)
     candidates = [
         {
@@ -698,7 +820,8 @@ def integration_candidates(files: ProjectFiles) -> list[dict[str, Any]]:
             "task_id": state.task_id,
         }
         for state in states
-        if state.state == "integration_ready"
+        if str(tasks_by_package.get(state.package_id, {}).get("status"))
+        in {"review_passed", "merge_approved", "integration_ready"}
     ]
     return sorted(candidates, key=lambda item: str(item["package_id"]))
 

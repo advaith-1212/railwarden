@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,6 +13,7 @@ from pydantic import Field
 from lfg.config.loader import load_project_files
 from lfg.engine.controller import integration_candidates
 from lfg.errors import LfgError
+from lfg.git import changed_files_in_commit, head
 from lfg.planning.pipeline import approve_latest_plan, create_pending_plan
 from lfg.runtime.checkpoints import create_checkpoint_commit
 from lfg.runtime.quota import load_quota
@@ -24,6 +27,8 @@ from lfg.runtime.session import (
 from lfg.runtime.skills import create_runtime_skill, promote_runtime_skill
 from lfg.runtime.tasks import load_tasks, transition_task
 from lfg.scheduler.classifier import package_branch, package_worktree
+from lfg.validation.package import run_package_validation
+from lfg.validation.review import run_package_review
 
 
 @dataclass(frozen=True)
@@ -79,6 +84,24 @@ def tools(start: Path) -> dict[str, Tool]:
             no_args(),
             lambda _payload: _plan_approve(start),
         ),
+        "lfg.plan.show": Tool(
+            "lfg.plan.show",
+            "Show the latest pending LFG plan and work packages.",
+            no_args(),
+            lambda _payload: _plan_show(start),
+        ),
+        "lfg.plan.reject": Tool(
+            "lfg.plan.reject",
+            "Reject the latest pending LFG plan.",
+            no_args({"reason": {"type": "string"}}, []),
+            lambda payload: _plan_reject(start, payload),
+        ),
+        "lfg.contracts.freeze": Tool(
+            "lfg.contracts.freeze",
+            "Freeze approved contracts and begin execution.",
+            no_args(),
+            lambda _payload: _plan_approve(start),
+        ),
         "lfg.task.list": Tool(
             "lfg.task.list",
             "List durable LFG tasks.",
@@ -96,6 +119,24 @@ def tools(start: Path) -> dict[str, Tool]:
                 ["task_id", "status"],
             ),
             lambda payload: _task_route(start, payload),
+        ),
+        "lfg.task.inspect": Tool(
+            "lfg.task.inspect",
+            "Inspect one task or work package.",
+            no_args({"task_id": {"type": "string", "minLength": 1}}, ["task_id"]),
+            lambda payload: _task_inspect(start, payload),
+        ),
+        "lfg.task.retry": Tool(
+            "lfg.task.retry",
+            "Mark a task or work package ready for retry.",
+            no_args({"task_id": {"type": "string", "minLength": 1}}, ["task_id"]),
+            lambda payload: _task_set_status(start, payload, "ready"),
+        ),
+        "lfg.task.reject": Tool(
+            "lfg.task.reject",
+            "Reject a task or work package.",
+            no_args({"task_id": {"type": "string", "minLength": 1}}, ["task_id"]),
+            lambda payload: _task_set_status(start, payload, "rejected"),
         ),
         "lfg.agent.swap": Tool(
             "lfg.agent.swap",
@@ -138,6 +179,30 @@ def tools(start: Path) -> dict[str, Tool]:
             "Return current integration candidates.",
             no_args(),
             lambda _payload: _integration_status(start),
+        ),
+        "lfg.validation.run": Tool(
+            "lfg.validation.run",
+            "Run LFG-owned package validation.",
+            no_args({"task_id": {"type": "string", "minLength": 1}}, ["task_id"]),
+            lambda payload: _validation_run(start, payload),
+        ),
+        "lfg.review.run": Tool(
+            "lfg.review.run",
+            "Run independent package review.",
+            no_args({"task_id": {"type": "string", "minLength": 1}}, ["task_id"]),
+            lambda payload: _review_run(start, payload),
+        ),
+        "lfg.merge.approve": Tool(
+            "lfg.merge.approve",
+            "Approve a package for merge.",
+            no_args({"task_id": {"type": "string", "minLength": 1}}, ["task_id"]),
+            lambda payload: _task_set_status(start, payload, "merge_approved"),
+        ),
+        "lfg.goal.abort": Tool(
+            "lfg.goal.abort",
+            "Abort active non-terminal tasks for the current goal.",
+            no_args({"reason": {"type": "string"}}, []),
+            lambda payload: _goal_abort(start, payload),
         ),
         "lfg.skill.create": Tool(
             "lfg.skill.create",
@@ -192,6 +257,27 @@ def fastmcp_server(start: Path | None = None) -> FastMCP:
         return _plan_approve(root)
 
     @server.tool(
+        name="lfg.plan.show",
+        description="Show the latest pending LFG plan and work packages.",
+    )
+    def plan_show() -> dict[str, Any]:
+        return _plan_show(root)
+
+    @server.tool(
+        name="lfg.plan.reject",
+        description="Reject the latest pending LFG plan.",
+    )
+    def plan_reject(reason: str = "") -> dict[str, Any]:
+        return _plan_reject(root, {"reason": reason})
+
+    @server.tool(
+        name="lfg.contracts.freeze",
+        description="Freeze approved contracts and begin execution.",
+    )
+    def contracts_freeze() -> dict[str, Any]:
+        return _plan_approve(root)
+
+    @server.tool(
         name="lfg.task.list",
         description="List durable LFG tasks.",
     )
@@ -204,6 +290,27 @@ def fastmcp_server(start: Path | None = None) -> FastMCP:
     )
     def task_route(task_id: NonEmptyString, status: TaskRouteStatus) -> dict[str, Any]:
         return _task_route(root, {"task_id": task_id, "status": status})
+
+    @server.tool(
+        name="lfg.task.inspect",
+        description="Inspect one task or work package.",
+    )
+    def task_inspect(task_id: NonEmptyString) -> dict[str, Any]:
+        return _task_inspect(root, {"task_id": task_id})
+
+    @server.tool(
+        name="lfg.task.retry",
+        description="Mark a task or work package ready for retry.",
+    )
+    def task_retry(task_id: NonEmptyString) -> dict[str, Any]:
+        return _task_set_status(root, {"task_id": task_id}, "ready")
+
+    @server.tool(
+        name="lfg.task.reject",
+        description="Reject a task or work package.",
+    )
+    def task_reject(task_id: NonEmptyString) -> dict[str, Any]:
+        return _task_set_status(root, {"task_id": task_id}, "rejected")
 
     @server.tool(
         name="lfg.agent.swap",
@@ -248,6 +355,34 @@ def fastmcp_server(start: Path | None = None) -> FastMCP:
         return _integration_status(root)
 
     @server.tool(
+        name="lfg.validation.run",
+        description="Run LFG-owned package validation.",
+    )
+    def validation_run(task_id: NonEmptyString) -> dict[str, Any]:
+        return _validation_run(root, {"task_id": task_id})
+
+    @server.tool(
+        name="lfg.review.run",
+        description="Run independent package review.",
+    )
+    def review_run(task_id: NonEmptyString) -> dict[str, Any]:
+        return _review_run(root, {"task_id": task_id})
+
+    @server.tool(
+        name="lfg.merge.approve",
+        description="Approve a package for merge.",
+    )
+    def merge_approve(task_id: NonEmptyString) -> dict[str, Any]:
+        return _task_set_status(root, {"task_id": task_id}, "merge_approved")
+
+    @server.tool(
+        name="lfg.goal.abort",
+        description="Abort active non-terminal tasks for the current goal.",
+    )
+    def goal_abort(reason: str = "") -> dict[str, Any]:
+        return _goal_abort(root, {"reason": reason})
+
+    @server.tool(
         name="lfg.skill.create",
         description="Create a runtime-only LFG skill for the current session.",
     )
@@ -280,6 +415,46 @@ def _plan_approve(start: Path) -> dict[str, Any]:
     return approve_latest_plan(files.project)
 
 
+def _plan_show(start: Path) -> dict[str, Any]:
+    files = load_project_files(start)
+    path = files.project.runtime_directory / "state" / "pending-plan.json"
+    if not path.exists():
+        return {"status": "missing"}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise LfgError("Pending plan state is invalid")
+    plan_path = Path(str(payload.get("plan_path", "")))
+    return {
+        "status": "pending",
+        "run_id": payload.get("run_id"),
+        "goal": payload.get("goal"),
+        "approved": payload.get("approved", False),
+        "rejected": payload.get("rejected", False),
+        "plan_markdown": plan_path.read_text(encoding="utf-8")
+        if plan_path.exists()
+        else "",
+        "work_packages": payload.get("work_packages", []),
+    }
+
+
+def _plan_reject(start: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    files = load_project_files(start)
+    path = files.project.runtime_directory / "state" / "pending-plan.json"
+    if not path.exists():
+        raise LfgError("No pending plan exists")
+    state = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(state, dict):
+        raise LfgError("Pending plan state is invalid")
+    state["approved"] = False
+    state["rejected"] = True
+    state["rejection_reason"] = str(payload.get("reason", ""))
+    state["rejected_at"] = time.time()
+    path.write_text(
+        json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    return {"status": "rejected", "run_id": state.get("run_id")}
+
+
 def _task_list(start: Path) -> dict[str, Any]:
     files = load_project_files(start)
     return {"tasks": load_tasks(files.project.runtime_directory)}
@@ -294,6 +469,95 @@ def _task_route(start: Path, payload: dict[str, Any]) -> dict[str, Any]:
             )
             return {"task": updated}
     raise LfgError(f"Unknown task: {payload['task_id']}")
+
+
+def _task_match(files: Any, task_id: str) -> tuple[dict[str, Any], Any]:
+    for task in load_tasks(files.project.runtime_directory):
+        if str(task.get("id")) == task_id or str(task.get("package_id")) == task_id:
+            package = files.packages.get(str(task.get("package_id", "")))
+            if package is None:
+                raise LfgError(f"Package is not loaded for task: {task_id}")
+            return task, package
+    raise LfgError(f"Unknown task: {task_id}")
+
+
+def _task_inspect(start: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    files = load_project_files(start)
+    task, package = _task_match(files, str(payload["task_id"]))
+    return {"task": task, "package": package.__dict__}
+
+
+def _task_set_status(
+    start: Path, payload: dict[str, Any], status: str
+) -> dict[str, Any]:
+    files = load_project_files(start)
+    task, _package = _task_match(files, str(payload["task_id"]))
+    updated = transition_task(files.project.runtime_directory, task, status)
+    return {"task": updated}
+
+
+def _validation_run(start: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    files = load_project_files(start)
+    task, package = _task_match(files, str(payload["task_id"]))
+    workspace = Path(
+        str(task.get("worktree", package_worktree(files.project, package)))
+    )
+    commit_hash = str(task.get("commit_hash") or head(workspace))
+    evidence = run_package_validation(files.project, package, workspace, commit_hash)
+    transition_task(
+        files.project.runtime_directory,
+        task,
+        "validated" if evidence["status"] == "passed" else "blocked",
+        {"package_validation": evidence},
+    )
+    return evidence
+
+
+def _review_run(start: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    files = load_project_files(start)
+    task, package = _task_match(files, str(payload["task_id"]))
+    workspace = Path(
+        str(task.get("worktree", package_worktree(files.project, package)))
+    )
+    commit_hash = str(task.get("commit_hash") or head(workspace))
+    validation = task.get("package_validation")
+    if not isinstance(validation, dict):
+        validation = run_package_validation(
+            files.project, package, workspace, commit_hash
+        )
+    review = run_package_review(
+        files.project,
+        package,
+        task=task,
+        worker_provider=str(task.get("provider", "")),
+        reviewer_provider=None,
+        changed_files=changed_files_in_commit(workspace, commit_hash),
+        validation_evidence=validation,
+    )
+    transition_task(
+        files.project.runtime_directory,
+        task,
+        "review_passed" if review["status"] == "passed" else "blocked",
+        {"review": review},
+    )
+    return review
+
+
+def _goal_abort(start: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    files = load_project_files(start)
+    reason = str(payload.get("reason", "manual abort") or "manual abort")
+    updated = []
+    for task in load_tasks(files.project.runtime_directory):
+        if str(task.get("status")) not in {"merged", "blocked", "failed", "rejected"}:
+            updated.append(
+                transition_task(
+                    files.project.runtime_directory,
+                    task,
+                    "blocked",
+                    {"goal_aborted": True, "reason": reason},
+                )
+            )
+    return {"status": "aborted", "reason": reason, "tasks": updated}
 
 
 def _agent_swap(start: Path, payload: dict[str, Any]) -> dict[str, Any]:

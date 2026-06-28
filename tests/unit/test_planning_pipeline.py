@@ -96,6 +96,57 @@ def test_create_and_approve_pending_plan(git_repo: Path) -> None:
     assert tasks[0]["status"] == "planned"
 
 
+def test_approve_pending_plan_writes_v2_orchestration_artifacts(
+    git_repo: Path,
+) -> None:
+    initialize_project(git_repo, yes=True)
+    files = load_project_files(git_repo)
+    output = """
+{
+  "plan_markdown": "# Plan\\n\\nDo the work.",
+  "work_packages": [
+    {
+      "id": "WP-9",
+      "name": "Risky runtime",
+      "objective": "Add runtime files",
+      "dependencies": [],
+      "owned_paths": ["src/lfg/runtime/"],
+      "forbidden_paths": [".git/"],
+      "acceptance_criteria": ["all runtime tests pass"],
+      "validation_commands": [
+        {"name": "runtime-tests", "command": {"cwd": ".", "argv": ["python3", "-c", "print('ok')"]}}
+      ],
+      "preferred_providers": ["codex"],
+      "model_profile": "codex:gpt-5.5?reasoning=high",
+      "reviewer_profile": "antigravity:claude-opus-4.6-thinking",
+      "risk_level": "high",
+      "context_refs": ["context/ARCHITECTURE.md"],
+      "merge_policy": "manual",
+      "approval_required": true
+    }
+  ]
+}
+"""
+    create_pending_plan(files.project, "implement runtime", planner_output_text=output)
+
+    approve_latest_plan(files.project)
+
+    packages = yaml.safe_load(
+        (git_repo / ".lfg" / "work_packages.yaml").read_text(encoding="utf-8")
+    )
+    assert packages["schema_version"] == "2.0.0"
+    assert packages["work_packages"][0]["risk_level"] == "high"
+    assert (git_repo / ".lfg" / "contract_freeze_manifest.yaml").exists()
+    assert (git_repo / ".lfg" / "model_assignment.yaml").exists()
+    assert "WP-9" in (git_repo / ".lfg" / "dependency_graph.mmd").read_text(
+        encoding="utf-8"
+    )
+    assert "src/lfg/runtime/" in (git_repo / ".lfg" / "ownership_matrix.csv").read_text(
+        encoding="utf-8"
+    )
+    assert (git_repo / ".lfg" / "agent_prompts" / "wp-9.md").exists()
+
+
 def test_create_pending_plan_from_human_markdown_with_structuring_pass(
     git_repo: Path,
 ) -> None:

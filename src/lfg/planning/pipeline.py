@@ -14,6 +14,7 @@ from lfg.errors import LfgError
 from lfg.planning.antigravity import AntigravityClaudePlanner
 from lfg.runtime.events import append_event
 from lfg.runtime.tasks import ensure_task
+from lfg.runtime.workflow import advance_workflow
 from lfg.util.atomic import atomic_write_json, atomic_write_text
 
 
@@ -94,7 +95,16 @@ Required shape:
       "owned_paths": [],
       "forbidden_paths": [],
       "acceptance_tests": [],
+      "acceptance_criteria": [],
+      "validation_commands": [],
       "preferred_providers": [],
+      "model_profile": null,
+      "reviewer_profile": null,
+      "risk_level": "medium",
+      "context_refs": [],
+      "merge_policy": "auto_after_review",
+      "approval_required": false,
+      "review_required": true,
       "branch": null,
       "worktree": null,
       "status_notes": null
@@ -163,6 +173,7 @@ def _normalize_work_packages(packages: Any) -> list[dict[str, Any]]:
         package_id = str(raw.get("id", "")).strip()
         if not package_id:
             raise LfgError("Each work package requires id")
+        raw_validation = raw.get("validation_commands", raw.get("validation", [])) or []
         normalized.append(
             {
                 "id": package_id,
@@ -172,7 +183,16 @@ def _normalize_work_packages(packages: Any) -> list[dict[str, Any]]:
                 "owned_paths": list(raw.get("owned_paths", [])),
                 "forbidden_paths": list(raw.get("forbidden_paths", [])),
                 "acceptance_tests": list(raw.get("acceptance_tests", [])),
+                "acceptance_criteria": list(raw.get("acceptance_criteria", [])),
+                "validation_commands": list(raw_validation),
                 "preferred_providers": list(raw.get("preferred_providers", [])),
+                "model_profile": raw.get("model_profile"),
+                "reviewer_profile": raw.get("reviewer_profile"),
+                "risk_level": str(raw.get("risk_level", "medium")),
+                "context_refs": list(raw.get("context_refs", [])),
+                "merge_policy": str(raw.get("merge_policy", "auto_after_review")),
+                "approval_required": bool(raw.get("approval_required", False)),
+                "review_required": bool(raw.get("review_required", True)),
                 **({"branch": str(raw["branch"])} if raw.get("branch") else {}),
                 **({"worktree": str(raw["worktree"])} if raw.get("worktree") else {}),
                 **(
@@ -326,6 +346,7 @@ def create_pending_plan(
     )
     atomic_write_text(run_dir / "plan.md", pending.plan_markdown)
     append_event(runtime_dir, "plan_created", {"run_id": run_id})
+    advance_workflow(runtime_dir, "PLAN_CREATED", payload={"run_id": run_id})
     return pending
 
 
@@ -349,10 +370,11 @@ def approve_latest_plan(config: ProjectConfig) -> dict[str, Any]:
     atomic_write_text(
         config_dir / "work_packages.yaml",
         yaml.safe_dump(
-            {"schema_version": "1.0.0", "work_packages": packages},
+            {"schema_version": "2.0.0", "work_packages": packages},
             sort_keys=False,
         ),
     )
+    _write_orchestration_artifacts(config, payload, packages)
     for package in packages:
         if isinstance(package, dict):
             ensure_task(
@@ -369,7 +391,117 @@ def approve_latest_plan(config: ProjectConfig) -> dict[str, Any]:
     append_event(
         config.runtime_directory, "plan_approved", {"run_id": payload["run_id"]}
     )
+    advance_workflow(
+        config.runtime_directory,
+        "CONTRACTS_FROZEN",
+        payload={"run_id": payload["run_id"]},
+    )
     return payload
+
+
+def _write_orchestration_artifacts(
+    config: ProjectConfig, payload: dict[str, Any], packages: list[Any]
+) -> None:
+    config_dir = config.repository_root / ".lfg"
+    normalized = [package for package in packages if isinstance(package, dict)]
+    frozen_at = time.time()
+    atomic_write_text(
+        config_dir / "contract_freeze_manifest.yaml",
+        yaml.safe_dump(
+            {
+                "schema_version": "2.0.0",
+                "run_id": payload["run_id"],
+                "goal": payload.get("goal", ""),
+                "frozen_at": frozen_at,
+                "approved": True,
+                "package_ids": [str(package["id"]) for package in normalized],
+                "contract_hash": hashlib.sha256(
+                    json.dumps(normalized, sort_keys=True).encode("utf-8")
+                ).hexdigest(),
+            },
+            sort_keys=False,
+        ),
+    )
+    atomic_write_text(
+        config_dir / "model_assignment.yaml",
+        yaml.safe_dump(
+            {
+                "schema_version": "2.0.0",
+                "assignments": [
+                    {
+                        "package_id": str(package["id"]),
+                        "model_profile": package.get("model_profile")
+                        or (package.get("preferred_providers") or [None])[0],
+                        "reviewer_profile": package.get("reviewer_profile"),
+                        "preferred_providers": package.get("preferred_providers", []),
+                    }
+                    for package in normalized
+                ],
+            },
+            sort_keys=False,
+        ),
+    )
+    atomic_write_text(
+        config_dir / "dependency_graph.mmd", _dependency_graph(normalized)
+    )
+    atomic_write_text(
+        config_dir / "ownership_matrix.csv", _ownership_matrix(normalized)
+    )
+    prompt_dir = config_dir / "agent_prompts"
+    prompt_dir.mkdir(parents=True, exist_ok=True)
+    for package in normalized:
+        atomic_write_text(
+            prompt_dir / f"{str(package['id']).lower()}.md",
+            _contract_prompt(str(payload.get("goal", "")), package),
+        )
+
+
+def _dependency_graph(packages: list[dict[str, Any]]) -> str:
+    lines = ["flowchart TD"]
+    for package in packages:
+        package_id = str(package["id"])
+        label = str(package.get("name") or package_id).replace('"', "'")
+        lines.append(f'  {package_id}["{package_id}: {label}"]')
+        for dependency in package.get("dependencies", []):
+            lines.append(f"  {dependency} --> {package_id}")
+    return "\n".join(lines) + "\n"
+
+
+def _ownership_matrix(packages: list[dict[str, Any]]) -> str:
+    rows = ["package_id,path,access"]
+    for package in packages:
+        package_id = str(package["id"])
+        for path in package.get("owned_paths", []):
+            rows.append(f"{package_id},{path},owned")
+        for path in package.get("forbidden_paths", []):
+            rows.append(f"{package_id},{path},forbidden")
+    return "\n".join(rows) + "\n"
+
+
+def _contract_prompt(goal: str, package: dict[str, Any]) -> str:
+    package_id = str(package["id"])
+    lines = [
+        f"# {package_id} {package.get('name', package_id)}",
+        "",
+        "## Goal",
+        goal.strip() or "(not recorded)",
+        "",
+        "## Objective",
+        str(package.get("objective", "")).strip(),
+        "",
+        "## Acceptance Criteria",
+        *[f"- {item}" for item in package.get("acceptance_criteria", [])],
+        "",
+        "## Validation Commands",
+        *[f"- {item}" for item in package.get("validation_commands", [])],
+        "",
+        "## Owned Paths",
+        *[f"- {item}" for item in package.get("owned_paths", [])],
+        "",
+        "## Forbidden Paths",
+        *[f"- {item}" for item in package.get("forbidden_paths", [])],
+    ]
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def plan_is_approved(config: ProjectConfig) -> bool:

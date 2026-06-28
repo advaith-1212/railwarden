@@ -144,9 +144,27 @@ def load_work_packages(repository_root: Path) -> dict[str, WorkPackage]:
             acceptance_tests=tuple(
                 str(item) for item in raw.get("acceptance_tests", [])
             ),
+            acceptance_criteria=tuple(
+                str(item) for item in raw.get("acceptance_criteria", [])
+            ),
+            validation_commands=_load_validation_commands(
+                raw.get("validation_commands", raw.get("validation", [])),
+                source=f"work_packages.{package_id}.validation_commands",
+            ),
             preferred_providers=tuple(
                 str(item) for item in raw.get("preferred_providers", [])
             ),
+            model_profile=str(raw["model_profile"])
+            if raw.get("model_profile") is not None
+            else None,
+            reviewer_profile=str(raw["reviewer_profile"])
+            if raw.get("reviewer_profile") is not None
+            else None,
+            risk_level=str(raw.get("risk_level", "medium")),
+            context_refs=tuple(str(item) for item in raw.get("context_refs", [])),
+            merge_policy=str(raw.get("merge_policy", "auto_after_review")),
+            approval_required=bool(raw.get("approval_required", False)),
+            review_required=bool(raw.get("review_required", True)),
             branch=str(raw["branch"]) if raw.get("branch") else None,
             worktree=Path(str(raw["worktree"])) if raw.get("worktree") else None,
             status_notes=str(raw["status_notes"])
@@ -164,10 +182,22 @@ def load_validation(repository_root: Path) -> tuple[ValidationCommand, ...]:
     raw_commands = payload.get("commands", [])
     if not isinstance(raw_commands, list):
         raise ConfigurationError("validation commands must be a list")
+    return _load_validation_commands(raw_commands, source="validation.commands")
+
+
+def _load_validation_commands(
+    raw_commands: object, *, source: str
+) -> tuple[ValidationCommand, ...]:
+    if raw_commands in (None, ""):
+        return ()
+    if not isinstance(raw_commands, list):
+        raise ConfigurationError(f"{source} must be a list")
     commands: list[ValidationCommand] = []
-    for raw in raw_commands:
+    for index, raw in enumerate(raw_commands):
+        if isinstance(raw, str):
+            raw = {"name": f"validation-{index + 1}", "command": raw}
         if not isinstance(raw, dict):
-            raise ConfigurationError("Invalid validation command")
+            raise ConfigurationError(f"Invalid validation command in {source}[{index}]")
         command = raw.get("command")
         if isinstance(command, dict):
             cwd = command.get("cwd", ".")
@@ -175,14 +205,18 @@ def load_validation(repository_root: Path) -> tuple[ValidationCommand, ...]:
         else:
             cwd = raw.get("cwd", ".")
             argv = raw.get("argv", raw.get("command", []))
+        if isinstance(argv, str):
+            argv = argv.split()
         if not isinstance(argv, list) or not argv:
-            raise ConfigurationError("Validation command requires argv list")
+            raise ConfigurationError(f"{source}[{index}] requires argv list")
         outputs = raw.get("generated_outputs", [])
         if not isinstance(outputs, list):
-            raise ConfigurationError("generated_outputs must be a list")
+            raise ConfigurationError(
+                f"{source}[{index}].generated_outputs must be a list"
+            )
         commands.append(
             ValidationCommand(
-                name=str(raw["name"]),
+                name=str(raw.get("name", f"validation-{index + 1}")),
                 cwd=Path(str(cwd)),
                 argv=tuple(str(item) for item in argv),
                 required=bool(raw.get("required", True)),

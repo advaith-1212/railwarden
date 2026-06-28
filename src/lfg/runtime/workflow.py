@@ -10,29 +10,39 @@ from lfg.runtime.events import append_event
 from lfg.util.atomic import atomic_write_json
 
 WorkflowNode = Literal[
-    "goal_received",
-    "architecture_review",
-    "plan_created",
-    "plan_approved",
-    "tasks_dispatched",
-    "monitoring",
-    "recovery_or_swap",
-    "validation",
-    "integration",
-    "goal_complete",
+    "GOAL_RECEIVED",
+    "REPOSITORY_ANALYZED",
+    "PLAN_CREATED",
+    "CONTRACTS_FROZEN",
+    "WORK_PACKAGES_CREATED",
+    "DAG_VALIDATED",
+    "AGENTS_ASSIGNED",
+    "WORK_EXECUTING",
+    "PACKAGE_VALIDATION",
+    "PACKAGE_REVIEW",
+    "DEPENDENCY_SAFE_MERGE",
+    "INTEGRATION_VALIDATION",
+    "RELEASE_REVIEW",
+    "GOAL_COMPLETE",
+    "RECOVERY_OR_SWAP",
 ]
 
 WORKFLOW_ORDER: tuple[WorkflowNode, ...] = (
-    "goal_received",
-    "architecture_review",
-    "plan_created",
-    "plan_approved",
-    "tasks_dispatched",
-    "monitoring",
-    "recovery_or_swap",
-    "validation",
-    "integration",
-    "goal_complete",
+    "GOAL_RECEIVED",
+    "REPOSITORY_ANALYZED",
+    "PLAN_CREATED",
+    "CONTRACTS_FROZEN",
+    "WORK_PACKAGES_CREATED",
+    "DAG_VALIDATED",
+    "AGENTS_ASSIGNED",
+    "WORK_EXECUTING",
+    "PACKAGE_VALIDATION",
+    "PACKAGE_REVIEW",
+    "DEPENDENCY_SAFE_MERGE",
+    "INTEGRATION_VALIDATION",
+    "RELEASE_REVIEW",
+    "GOAL_COMPLETE",
+    "RECOVERY_OR_SWAP",
 )
 
 
@@ -53,7 +63,7 @@ def load_workflow(runtime_dir: Path, thread_id: str = "default") -> WorkflowChec
     if not path.exists():
         return WorkflowCheckpoint(
             thread_id=thread_id,
-            node="goal_received",
+            node="GOAL_RECEIVED",
             payload={},
             updated_at=time.time(),
         )

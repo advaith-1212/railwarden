@@ -84,7 +84,11 @@ def launch_layout(
             PaneSpec(
                 agent.agent_id,
                 _pane_title(agent, label=agent.agent_id, budget=profile.budget_label),
-                f"cd {root} && lfg worker {shlex.quote(agent.executor_adapter)} 2>&1 | tee -a {shlex.quote(str(config.runtime_directory / 'logs' / f'{agent.agent_id}.log'))}",
+                (
+                    f"cd {root} && printf %s\\\\n "
+                    f"{shlex.quote(f'LFG worker pane ready: {agent.agent_id} ({agent.executor_adapter})')} "
+                    "&& exec ${SHELL:-/bin/sh}"
+                ),
                 "factory",
             )
         )
