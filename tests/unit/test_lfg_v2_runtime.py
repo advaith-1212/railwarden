@@ -50,6 +50,9 @@ def test_model_ref_parsing_normalizes_supported_shapes() -> None:
     )
     assert openai_compatible.base_url == "https://api.example.com/v1"
 
+    composer = parse_model_ref("composer:grok-composer-2.5-fast")
+    assert composer.provider == "composer"
+
 
 def test_pydanticai_agent_translates_lfg_model_refs(
     monkeypatch: pytest.MonkeyPatch,
@@ -89,6 +92,7 @@ def test_provider_registry_lists_valid_default_model_refs() -> None:
     refs = [model["ref"] for model in models]
 
     assert "openai:gpt-5.2" in refs
+    assert "composer:grok-composer-2.5-fast" in refs
     assert "ollama:qwen3-coder@http://localhost:11434" in refs
     assert all(result["status"] == "ok" for result in validate_model_refs(refs))
 
@@ -100,6 +104,19 @@ def test_session_profile_serializes_without_raw_secret(
     files = load_project_files(git_repo)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-testsecretvalue123456789")
     profile = load_session_profile(files.project)
+    assert profile.reviewer is not None
+    profile = update_agent(
+        profile,
+        AgentInstance(
+            agent_id=profile.reviewer.agent_id,
+            role=profile.reviewer.role,
+            model_profile=model_profile_from_ref("openai:gpt-5.2"),
+            executor_adapter=profile.reviewer.executor_adapter,
+            state=profile.reviewer.state,
+            quota_policy=profile.reviewer.quota_policy,
+            active_task=profile.reviewer.active_task,
+        ),
+    )
     save_session_profile(files.project, profile)
 
     text = (
@@ -107,6 +124,25 @@ def test_session_profile_serializes_without_raw_secret(
     ).read_text(encoding="utf-8")
     assert "sk-testsecretvalue" not in text
     assert "env:" in text
+
+
+def test_default_session_profile_uses_valid_cli_model_refs(git_repo: Path) -> None:
+    initialize_project(git_repo, yes=True)
+    profile = load_session_profile(load_project_files(git_repo).project)
+
+    assert (
+        profile.orchestrator.model_profile.model_ref == "codex:gpt-5.5?reasoning=high"
+    )
+    assert profile.reviewer is not None
+    assert profile.reviewer.model_profile.model_ref == "codex:gpt-5.5?reasoning=high"
+    antigravity = next(
+        agent for agent in profile.workers if agent.executor_adapter == "antigravity"
+    )
+    composer = next(
+        agent for agent in profile.workers if agent.executor_adapter == "composer"
+    )
+    assert antigravity.model_profile.model_ref == "antigravity:gemini-3.5-flash-low"
+    assert composer.model_profile.model_ref == "composer:grok-composer-2.5-fast"
 
 
 def test_secret_redaction_covers_keys_tokens_and_env(
@@ -129,7 +165,14 @@ def test_hermes_profile_generation_is_runtime_only(git_repo: Path) -> None:
 
     assert files.project.runtime_directory in hermes.config_path.parents
     assert hermes.env_path.stat().st_mode & 0o777 == 0o600
-    assert ".lfg/skills" in hermes.config_path.read_text(encoding="utf-8")
+    assert "LFG is authoritative" in hermes.soul_path.read_text(encoding="utf-8")
+    assert "name: lfg-factory" in hermes.skill_path.read_text(encoding="utf-8")
+    config = hermes.config_path.read_text(encoding="utf-8")
+    assert "mcp_servers:" in config
+    assert "command: lfg" in config
+    assert Path(hermes.command[3]).name in {"hermes", "hermes-agent"}
+    assert hermes.command[4] == "chat"
+    assert "--cli" in hermes.command
     mcp = json.loads(hermes.mcp_config_path.read_text(encoding="utf-8"))
     assert mcp["mcpServers"]["lfg"]["command"] == "lfg"
     assert mcp["mcpServers"]["lfg"]["args"] == ["mcp", "serve"]
@@ -193,6 +236,7 @@ def test_tmux_launch_layout_has_factory_and_observability(git_repo: Path) -> Non
     )
     assert any("role=coder exec=codex provider=codex" in spec.title for spec in specs)
     assert any("lfg observability" in spec.command for spec in specs)
+    assert not any("watch -n 5 lfg observability" in spec.command for spec in specs)
 
 
 def test_launch_wizard_persists_budget_quota_fallback_and_review_models(
@@ -214,11 +258,12 @@ def test_launch_wizard_persists_budget_quota_fallback_and_review_models(
             "\n".join(
                 [
                     "interactive",
+                    "advanced",
                     "openai:gpt-5.2",
                     "anthropic:claude-opus-4.6",
                     "codex:gpt-5.5?reasoning=medium",
                     "antigravity:claude-opus-4.6-thinking",
-                    "openai:gpt-5.2",
+                    "composer:grok-composer-2.5-fast",
                     "gemini:gemini-3-pro",
                     "acceptance-budget",
                     "auto-swap",
@@ -241,6 +286,9 @@ def test_launch_wizard_persists_budget_quota_fallback_and_review_models(
     assert profile.orchestrator.model_profile.model_ref == "openai:gpt-5.2"
     assert profile.architect.model_profile.model_ref == "anthropic:claude-opus-4.6"
     assert profile.workers[0].model_profile.reasoning_effort == "medium"
+    assert (
+        profile.workers[2].model_profile.model_ref == "composer:grok-composer-2.5-fast"
+    )
     assert profile.reviewer is not None
     assert profile.reviewer.model_profile.model_ref == "gemini:gemini-3-pro"
     assert profile.orchestrator.quota_policy.warning_threshold_percent == 20

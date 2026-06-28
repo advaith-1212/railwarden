@@ -9,6 +9,7 @@ from lfg.errors import ConfigurationError
 KNOWN_PROVIDERS = {
     "codex",
     "antigravity",
+    "composer",
     "openai",
     "anthropic",
     "gemini",
@@ -83,7 +84,7 @@ def _split_model_base_url(provider: str, model_part: str) -> tuple[str, str | No
 
 
 def provider_transport(provider: str) -> str:
-    if provider in {"codex", "antigravity"}:
+    if provider in {"codex", "antigravity", "composer"}:
         return "cli"
     if provider == "ollama":
         return "http"

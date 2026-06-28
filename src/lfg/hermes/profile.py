@@ -18,6 +18,8 @@ class HermesRuntimeProfile:
     home: Path
     config_path: Path
     instructions_path: Path
+    soul_path: Path
+    skill_path: Path
     env_path: Path
     mcp_config_path: Path
     command: tuple[str, ...]
@@ -27,6 +29,8 @@ class HermesRuntimeProfile:
             "home": str(self.home),
             "config_path": str(self.config_path),
             "instructions_path": str(self.instructions_path),
+            "soul_path": str(self.soul_path),
+            "skill_path": str(self.skill_path),
             "env_path": str(self.env_path),
             "mcp_config_path": str(self.mcp_config_path),
             "command": list(self.command),
@@ -47,6 +51,8 @@ def generate_hermes_profile(
 ) -> HermesRuntimeProfile:
     home = config.runtime_directory / "hermes" / session.name
     instructions_path = home / "lfg-factory-instructions.md"
+    soul_path = home / "SOUL.md"
+    skill_path = home / "skills" / "lfg-factory" / "SKILL.md"
     config_path = home / "config.yaml"
     mcp_config_path = home / "mcp.json"
     env_path = ensure_runtime_secrets_file(home)
@@ -56,7 +62,10 @@ def generate_hermes_profile(
     ]
     for directory in skill_dirs:
         Path(directory).mkdir(parents=True, exist_ok=True)
-    atomic_write_text(instructions_path, _instructions(config, session))
+    instructions = _instructions(config, session)
+    atomic_write_text(instructions_path, instructions)
+    atomic_write_text(soul_path, instructions)
+    atomic_write_text(skill_path, _skill(instructions))
     atomic_write_text(
         mcp_config_path,
         json.dumps(
@@ -74,36 +83,65 @@ def generate_hermes_profile(
         )
         + "\n",
     )
+    command = _lfg_mcp_command()
     payload = {
         "model": {
-            "provider": session.orchestrator.model_profile.provider,
+            "provider": _hermes_provider(session.orchestrator.model_profile.provider),
+            "default": session.orchestrator.model_profile.model,
             "name": session.orchestrator.model_profile.model,
             "reasoning_effort": session.orchestrator.model_profile.reasoning_effort,
             "base_url": session.orchestrator.model_profile.base_url,
         },
+        "providers": {},
+        "toolsets": ["hermes-cli"],
         "terminal": {"backend": "local"},
-        "instructions": {"file": str(instructions_path)},
-        "skills": {"external_dirs": skill_dirs},
-        "mcp": {"config_file": str(mcp_config_path)},
-        "env_file": str(env_path),
+        "mcp_servers": {
+            "lfg": {
+                "command": command[0],
+                "args": command[1:],
+                "enabled": True,
+            }
+        },
     }
     atomic_write_text(config_path, yaml.safe_dump(payload, sort_keys=False))
     executable = hermes_executable() or "hermes"
-    command = (
+    hermes_command = (
         "env",
         f"HERMES_HOME={home}",
+        "HERMES_ACCEPT_HOOKS=1",
         executable,
-        "--config",
-        str(config_path),
+        "chat",
+        "--cli",
+        "--source",
+        "lfg",
     )
     return HermesRuntimeProfile(
         home=home,
         config_path=config_path,
         instructions_path=instructions_path,
+        soul_path=soul_path,
+        skill_path=skill_path,
         env_path=env_path,
         mcp_config_path=mcp_config_path,
-        command=command,
+        command=hermes_command,
     )
+
+
+def _lfg_mcp_command() -> list[str]:
+    return ["lfg", "mcp", "serve"]
+
+
+def _hermes_provider(provider: str) -> str:
+    mapping = {
+        "codex": "openai-codex",
+        "openai": "openai",
+        "anthropic": "anthropic",
+        "gemini": "google",
+        "ollama": "ollama-launch",
+        "openai-compatible": "openai",
+        "azure-foundry": "azure",
+    }
+    return mapping.get(provider, provider)
 
 
 def _instructions(config: ProjectConfig, session: SessionProfile) -> str:
@@ -126,4 +164,14 @@ tracked files, logs, fixtures, snapshots, or errors.
 
 Workers:
 {workers or "- none"}
+"""
+
+
+def _skill(instructions: str) -> str:
+    return f"""---
+name: lfg-factory
+description: Use LFG MCP tools to run this repository as a durable agentic development factory.
+---
+
+{instructions}
 """

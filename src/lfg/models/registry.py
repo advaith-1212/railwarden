@@ -26,6 +26,18 @@ DEFAULT_MODELS: tuple[RegistryModel, ...] = (
         "cli",
         "Antigravity CLI",
     ),
+    RegistryModel(
+        "antigravity:gemini-3.5-flash-low",
+        "coder",
+        "cli",
+        "Antigravity Gemini 3.5 Flash Low",
+    ),
+    RegistryModel(
+        "composer:grok-composer-2.5-fast",
+        "coder/repair",
+        "cli",
+        "Grok Composer CLI",
+    ),
     RegistryModel("openai:gpt-5.2", "reviewer/repair", "api", "OpenAI API"),
     RegistryModel(
         "anthropic:claude-opus-4.6", "planner/reviewer", "api", "Anthropic API"

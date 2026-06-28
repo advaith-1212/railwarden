@@ -139,9 +139,11 @@ def session_profile_path(config: ProjectConfig) -> Path:
 def default_session_profile(
     config: ProjectConfig, *, name: str = "default"
 ) -> SessionProfile:
-    orchestrator_ref = _legacy_model_ref(config.hermes_primary_model, provider="codex")
+    orchestrator_ref = _legacy_model_ref(
+        config.hermes_primary_model, provider="codex", role="orchestrator"
+    )
     architect_ref = _legacy_model_ref(
-        config.planner_model, provider=config.planner_provider
+        config.planner_model, provider=config.planner_provider, role="architect"
     )
     workers = tuple(
         AgentInstance(
@@ -184,8 +186,8 @@ def default_session_profile(
 def _default_provider_model(provider: str) -> str:
     defaults = {
         "codex": "gpt-5.5?reasoning=high",
-        "antigravity": "claude-opus-4.6-thinking",
-        "composer": "gpt-5.2",
+        "antigravity": "gemini-3.5-flash-low",
+        "composer": "grok-composer-2.5-fast",
         "openai": "gpt-5.2",
         "anthropic": "claude-opus-4.6",
         "gemini": "gemini-3-pro",
@@ -194,10 +196,14 @@ def _default_provider_model(provider: str) -> str:
     return defaults.get(provider, "gpt-5.2")
 
 
-def _legacy_model_ref(model: str, *, provider: str) -> str:
+def _legacy_model_ref(model: str, *, provider: str, role: str | None = None) -> str:
     if ":" in model:
         return model
-    normalized_provider = provider if provider in {"codex", "antigravity"} else "openai"
+    if provider == "codex" and role in {"orchestrator", "reviewer"}:
+        return "codex:gpt-5.5?reasoning=high"
+    normalized_provider = (
+        provider if provider in {"codex", "antigravity", "composer"} else "openai"
+    )
     slug = (
         model.lower()
         .replace("(", "")
@@ -205,8 +211,6 @@ def _legacy_model_ref(model: str, *, provider: str) -> str:
         .replace(" ", "-")
         .replace("--", "-")
     )
-    if normalized_provider == "antigravity" and "claude" not in slug:
-        normalized_provider = "gemini"
     return f"{normalized_provider}:{slug}"
 
 

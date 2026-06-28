@@ -13,3 +13,4 @@ artifacts/*.json
 !artifacts/.gitkeep
 !artifacts/tmom-adoption-dry-run.md
 work/
+.lfg-worktrees/

@@ -19,3 +19,22 @@ Work packages support `id`, `name`, `objective`, `dependencies`, `owned_paths`,
 `forbidden_paths`, `acceptance_tests`, `preferred_providers`, `branch`,
 `worktree`, and `status_notes`. Runtime truth lives in
 `.lfg-runtime/state/tasks.json`; `status_notes` is only planner/user context.
+
+## LFG v2 Launch Defaults
+
+`lfg launch` stores launch-time choices in
+`.lfg-runtime/state/session-profile.json`. The default preset uses valid model
+refs for the installed adapters:
+
+- Hermes orchestrator: `codex:gpt-5.5?reasoning=high`
+- Architect/planner: `antigravity:claude-opus-4.6-thinking`
+- Codex worker: `codex:gpt-5.5?reasoning=high`
+- Antigravity worker: `antigravity:gemini-3.5-flash-low`
+- Composer worker: `composer:grok-composer-2.5-fast`
+
+Hermes integration is generated under `.lfg-runtime/hermes/<profile>/` and is
+not tracked. LFG writes a Hermes-native `config.yaml` with `mcp_servers.lfg`,
+a `SOUL.md` identity file containing LFG factory instructions, and a local
+`skills/lfg-factory/SKILL.md` for discoverability. The launch command uses
+`HERMES_HOME=<runtime-profile> hermes chat --cli`; it does not pass unsupported
+`--config`, `--toolsets mcp`, or `--skills lfg-factory` flags.

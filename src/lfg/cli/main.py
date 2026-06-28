@@ -81,11 +81,60 @@ def cmd_init(args: argparse.Namespace) -> int:
     root = discover_repo(Path.cwd())
     if not args.yes:
         result = initialize_project(root, yes=False)
+        print("LFG project setup preview")
+        print()
+        print(f"Repository: {root}")
+        print(
+            "Files to create: .lfg/project.yaml, .lfg/work_packages.yaml, .lfg/validation.yaml"
+        )
+        print("Runtime state: .lfg-runtime/ (ignored by git)")
+        print()
         print("Proposed .gitignore additions:")
-        print(result["gitignore_proposal"] or "none")
-        print("Run `lfg init --yes` to apply.")
+        print(result["gitignore_proposal"] or "  none")
+        print()
+        print("Run `lfg init --yes` to write these files.")
         return 0
-    print(json.dumps(initialize_project(root, yes=True), indent=2, sort_keys=True))
+    result = initialize_project(root, yes=True)
+    print("LFG project initialized")
+    print()
+    for key in ("config", "work_packages", "validation", "state_schema"):
+        if key in result:
+            print(f"{key.replace('_', ' ').title()}: {result[key]}")
+    print()
+    print("Next steps:")
+    print(
+        "  1. Run `lfg doctor` to check Hermes, tmux, providers, MCP, and runtime ignore rules."
+    )
+    print("  2. Run `lfg launch` to start the factory tmux session.")
+    print("  3. Tell Hermes what to build in the factory window.")
+    return 0
+
+
+def cmd_setup(args: argparse.Namespace) -> int:
+    root = discover_repo(Path.cwd())
+    configured = (root / ".lfg" / "project.yaml").exists() or (
+        root / ".lfg" / "factory.yaml"
+    ).exists()
+    print("LFG setup")
+    print()
+    print(f"Repository: {root}")
+    if not configured:
+        if not args.yes:
+            print("This repository is not configured yet.")
+            print(
+                "Run `lfg setup --yes` to create project config and runtime ignore rules."
+            )
+            print("Then run `lfg doctor` to verify Hermes, tmux, providers, and MCP.")
+            return 0
+        initialize_project(root, yes=True)
+        print("Created .lfg project configuration.")
+    else:
+        print("Project configuration already exists.")
+    print()
+    print("Recommended next steps:")
+    print("  1. lfg doctor")
+    print("  2. lfg launch")
+    print("  3. Tell Hermes what to build in the factory window")
     return 0
 
 
@@ -177,6 +226,229 @@ def _prompt_optional_int(default: int | None, label: str) -> int | None:
     return int(value) if value else None
 
 
+def _prompt_choice(default: str, label: str, choices: dict[str, str]) -> str:
+    if not sys.stdin.isatty():
+        return default
+    print(label)
+    for key, description in choices.items():
+        marker = " (default)" if key == default else ""
+        print(f"  {key}{marker}: {description}")
+    value = input(f"Choose [{default}]: ").strip()
+    if not value:
+        return default
+    if value not in choices:
+        raise LfgError(f"Expected one of: {', '.join(choices)}")
+    return value
+
+
+def _section(title: str) -> None:
+    print(title)
+    print("-" * len(title))
+
+
+def _table(headers: list[str], rows: list[list[object]]) -> None:
+    if not rows:
+        print("  none")
+        return
+    text_rows = [[_cell(item) for item in row] for row in rows]
+    widths = [
+        max(len(headers[index]), *(len(row[index]) for row in text_rows))
+        for index in range(len(headers))
+    ]
+    print("  " + "  ".join(headers[i].ljust(widths[i]) for i in range(len(headers))))
+    print("  " + "  ".join("-" * width for width in widths))
+    for row in text_rows:
+        print("  " + "  ".join(row[i].ljust(widths[i]) for i in range(len(headers))))
+
+
+def _cell(value: object) -> str:
+    if value is None:
+        return "-"
+    if isinstance(value, float):
+        return f"{value:g}"
+    return str(value)
+
+
+def _status(value: object) -> str:
+    text = str(value)
+    if text in {"healthy", "available", "ok", "reachable"}:
+        return f"OK {text}"
+    if text in {"missing", "failed", "unavailable", "unreachable"}:
+        return f"FAIL {text}"
+    if text in {"skipped", "external-or-not-required", "external"}:
+        return f"INFO {text}"
+    return text
+
+
+def _print_doctor(payload: dict[str, Any]) -> None:
+    _section("LFG doctor")
+    print(
+        "Checks local tools, providers, credentials, Hermes profile, MCP, and git ignore rules."
+    )
+    print()
+
+    tools = payload.get("tools", {})
+    if isinstance(tools, dict):
+        _section("Tools")
+        _table(
+            ["Tool", "Status", "Path/Detail"],
+            [
+                [
+                    name,
+                    _status(_mapping_or_empty(row).get("status", "-")),
+                    _mapping_or_empty(row).get("path")
+                    or _mapping_or_empty(row).get("available")
+                    or "-",
+                ]
+                for name, row in tools.items()
+            ],
+        )
+        print()
+
+    providers = payload.get("providers", {})
+    if isinstance(providers, dict):
+        _section("Provider CLIs")
+        _table(
+            ["Provider", "Status", "Executable", "Model"],
+            [
+                [
+                    name,
+                    _status(_mapping_or_empty(row).get("status", "-")),
+                    _mapping_or_empty(row).get("executable")
+                    or _mapping_or_empty(row).get("reason")
+                    or "-",
+                    _mapping_or_empty(row).get("model", "-"),
+                ]
+                for name, row in providers.items()
+            ],
+        )
+        print()
+
+    _section("Credentials")
+    _table(
+        ["Agent", "Provider", "Status", "Auth ref"],
+        [
+            [
+                row.get("agent_id", "-"),
+                row.get("provider", "-"),
+                _status(row.get("status", "-")),
+                row.get("auth_ref", "-"),
+            ]
+            for row in _list_of_dicts(payload.get("credentials"))
+        ],
+    )
+    print()
+
+    endpoints = _list_of_dicts(payload.get("endpoints"))
+    if endpoints:
+        _section("Endpoints")
+        _table(
+            ["Agent", "Provider", "Status", "Base URL", "Detail"],
+            [
+                [
+                    row.get("agent_id", "-"),
+                    row.get("provider", "-"),
+                    _status(row.get("status", "-")),
+                    row.get("base_url", "-"),
+                    row.get("reason") or row.get("http_status") or "-",
+                ]
+                for row in endpoints
+            ],
+        )
+        print()
+
+    coordination = _mapping_or_empty(payload.get("coordination"))
+    mcp = _mapping_or_empty(coordination.get("mcp"))
+    hermes_profile = _mapping_or_empty(coordination.get("hermes_profile"))
+    _section("Coordination")
+    _table(
+        ["Check", "Status", "Detail"],
+        [
+            [
+                "LFG MCP stdio",
+                _status(mcp.get("status", "-")),
+                f"{mcp.get('tool_count', 0)} tools",
+            ],
+            [
+                "Hermes generated profile",
+                _status(hermes_profile.get("status", "-")),
+                hermes_profile.get("home") or hermes_profile.get("reason") or "-",
+            ],
+            [
+                "Runtime ignored by git",
+                "OK yes" if coordination.get("runtime_ignored") else "FAIL no",
+                ".lfg-runtime",
+            ],
+        ],
+    )
+    if hermes_profile.get("mcp_test"):
+        print()
+        print("Hermes MCP test:")
+        for line in str(hermes_profile["mcp_test"]).splitlines()[-8:]:
+            print(f"  {line}")
+    print()
+
+    planner = _mapping_or_empty(payload.get("planning_architect"))
+    if planner:
+        _section("Planning architect")
+        _table(
+            ["Detected", "Authenticated", "Model", "Limitation"],
+            [
+                [
+                    planner.get("detected"),
+                    planner.get("authenticated"),
+                    planner.get("model_identifier", "-"),
+                    planner.get("remaining_limitation", "-"),
+                ]
+            ],
+        )
+
+
+def _mapping_or_empty(value: object) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _list_of_dicts(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+LAUNCH_PRESETS: dict[str, dict[str, str]] = {
+    "default-dev-shop": {
+        "description": "Hermes on Codex, Antigravity architect, Codex/Antigravity/Composer workers.",
+        "orchestrator": "codex:gpt-5.5?reasoning=high",
+        "architect": "antigravity:claude-opus-4.6-thinking",
+        "reviewer": "codex:gpt-5.5?reasoning=high",
+    },
+    "codex-antigravity": {
+        "description": "Codex for Hermes and coding, Antigravity for planning.",
+        "orchestrator": "codex:gpt-5.5?reasoning=high",
+        "architect": "antigravity:claude-opus-4.6-thinking",
+        "reviewer": "codex:gpt-5.5?reasoning=high",
+    },
+    "local-only": {
+        "description": "Prefer local Ollama for API-backed review/repair roles.",
+        "orchestrator": "codex:gpt-5.5?reasoning=high",
+        "architect": "antigravity:claude-opus-4.6-thinking",
+        "reviewer": "ollama:qwen3-coder@http://localhost:11434",
+    },
+    "advanced": {
+        "description": "Ask for every model ref and quota setting.",
+        "orchestrator": "",
+        "architect": "",
+        "reviewer": "",
+    },
+}
+
+
+FALLBACK_POLICIES = {
+    "prompt-before-swap": "Pause and ask before moving active work to a different model.",
+    "auto-swap": "Automatically hand off low-quota or failed work to the next eligible provider.",
+    "manual-only": "Never swap automatically; only explicit `lfg agent swap` changes models.",
+}
+
+
 def _agent_with_model_and_policy(
     agent: AgentInstance,
     *,
@@ -195,51 +467,87 @@ def _agent_with_model_and_policy(
 
 
 def _build_launch_profile(
-    profile: SessionProfile, *, name: str | None
+    profile: SessionProfile, *, name: str | None, preset_name: str | None = None
 ) -> SessionProfile:
     profile_name = name or _prompt(profile.name, "Session profile")
-    orchestrator_ref = _prompt(
-        profile.orchestrator.model_profile.model_ref,
-        "Hermes orchestrator model ref",
+    if preset_name is None:
+        preset_name = _prompt_choice(
+            "default-dev-shop",
+            "Launch preset",
+            {key: value["description"] for key, value in LAUNCH_PRESETS.items()},
+        )
+    elif preset_name not in LAUNCH_PRESETS:
+        raise LfgError(f"Expected one of: {', '.join(LAUNCH_PRESETS)}")
+    preset = LAUNCH_PRESETS[preset_name]
+    advanced = preset_name == "advanced"
+
+    orchestrator_ref = (
+        preset["orchestrator"] or profile.orchestrator.model_profile.model_ref
     )
-    architect_ref = _prompt(
-        profile.architect.model_profile.model_ref, "Architect model ref"
-    )
-    worker_refs = [
-        _prompt(worker.model_profile.model_ref, f"{worker.agent_id} model ref")
-        for worker in profile.workers
-    ]
+    architect_ref = preset["architect"] or profile.architect.model_profile.model_ref
+    worker_refs = [_default_worker_ref(worker) for worker in profile.workers]
     reviewer_ref = (
-        _prompt(profile.reviewer.model_profile.model_ref, "Reviewer model ref")
+        preset["reviewer"] or profile.reviewer.model_profile.model_ref
         if profile.reviewer is not None
         else None
     )
     validator_ref = (
-        _prompt(profile.validator.model_profile.model_ref, "Validator model ref")
+        profile.validator.model_profile.model_ref
         if profile.validator is not None
         else None
     )
-    budget_label = _prompt(profile.budget_label, "Budget label")
-    fallback_policy = _prompt(profile.fallback_policy, "Fallback/swap policy")
-    default_policy = profile.orchestrator.quota_policy
-    quota_policy = QuotaPolicy(
-        warning_threshold_percent=_prompt_float(
-            default_policy.warning_threshold_percent,
-            "Quota warning threshold percent",
-        ),
-        pause_threshold_percent=_prompt_float(
-            default_policy.pause_threshold_percent,
-            "Quota pause threshold percent",
-        ),
-        hard_stop_below_pause=_prompt_bool(
-            default_policy.hard_stop_below_pause,
-            "Hard stop below pause threshold",
-        ),
-        manual_token_limit=_prompt_optional_int(
-            default_policy.manual_token_limit,
-            "Manual token budget limit",
-        ),
+
+    if advanced:
+        orchestrator_ref = _prompt(orchestrator_ref, "Hermes orchestrator model ref")
+        architect_ref = _prompt(architect_ref, "Architect model ref")
+        worker_refs = [
+            _prompt(worker_refs[index], f"{worker.agent_id} model ref")
+            for index, worker in enumerate(profile.workers)
+        ]
+        reviewer_ref = (
+            _prompt(reviewer_ref, "Reviewer model ref")
+            if profile.reviewer is not None and reviewer_ref is not None
+            else None
+        )
+        validator_ref = (
+            _prompt(validator_ref, "Validator model ref")
+            if profile.validator is not None and validator_ref is not None
+            else None
+        )
+
+    budget_label = _prompt(
+        profile.budget_label,
+        "Budget/session label (shown in panes and quota reports)",
     )
+    fallback_policy = _prompt_choice(
+        profile.fallback_policy
+        if profile.fallback_policy in FALLBACK_POLICIES
+        else "prompt-before-swap",
+        "Fallback/swap policy",
+        FALLBACK_POLICIES,
+    )
+    default_policy = profile.orchestrator.quota_policy
+    if advanced:
+        quota_policy = QuotaPolicy(
+            warning_threshold_percent=_prompt_float(
+                default_policy.warning_threshold_percent,
+                "Quota warning threshold percent (warn below this)",
+            ),
+            pause_threshold_percent=_prompt_float(
+                default_policy.pause_threshold_percent,
+                "Quota pause threshold percent (stop new work below this)",
+            ),
+            hard_stop_below_pause=_prompt_bool(
+                default_policy.hard_stop_below_pause,
+                "Hard stop below pause threshold",
+            ),
+            manual_token_limit=_prompt_optional_int(
+                default_policy.manual_token_limit,
+                "Manual token budget limit (blank when provider reports quota)",
+            ),
+        )
+    else:
+        quota_policy = default_policy
     workers = tuple(
         _agent_with_model_and_policy(
             worker,
@@ -283,10 +591,20 @@ def _build_launch_profile(
     )
 
 
+def _default_worker_ref(worker: AgentInstance) -> str:
+    if worker.executor_adapter == "codex":
+        return "codex:gpt-5.5?reasoning=high"
+    if worker.executor_adapter == "antigravity":
+        return "antigravity:gemini-3.5-flash-low"
+    if worker.executor_adapter == "composer":
+        return "composer:grok-composer-2.5-fast"
+    return worker.model_profile.model_ref
+
+
 def cmd_launch(args: argparse.Namespace) -> int:
     _, files = configured_project(Path.cwd())
     profile = load_session_profile(files.project)
-    profile = _build_launch_profile(profile, name=args.profile)
+    profile = _build_launch_profile(profile, name=args.profile, preset_name=args.preset)
     save_session_profile(files.project, profile)
     hermes_profile = generate_hermes_profile(files.project, profile)
     advance_workflow(
@@ -300,19 +618,21 @@ def cmd_launch(args: argparse.Namespace) -> int:
         profile=profile,
         hermes_profile=hermes_profile,
     )
+    print("LFG factory launched")
+    print()
+    print(f"Tmux session: {name}")
     print(
-        json.dumps(
-            {
-                "session": name,
-                "profile": str(
-                    files.project.runtime_directory / "state" / "session-profile.json"
-                ),
-                "hermes": hermes_profile.to_dict(),
-            },
-            indent=2,
-            sort_keys=True,
-        )
+        f"Session profile: {files.project.runtime_directory / 'state' / 'session-profile.json'}"
     )
+    print(f"Hermes home: {hermes_profile.home}")
+    print(f"Hermes command: {' '.join(hermes_profile.command)}")
+    print()
+    print("Windows:")
+    print("  factory       Hermes, controller, workers, integration")
+    print("  observability DAG, workflow, git, quotas, events, logs")
+    if args.no_attach:
+        print()
+        print(f"Attach with: tmux attach -t {name}")
     return 0
 
 
@@ -332,8 +652,16 @@ def cmd_stop(_args: argparse.Namespace) -> int:
 
 def cmd_status(_args: argparse.Namespace) -> int:
     _, files = configured_project(Path.cwd())
-    payload = {"session": session_name(files.project), "panes": panes(files.project)}
-    print(json.dumps(payload, indent=2, sort_keys=True))
+    pane_rows = panes(files.project)
+    _section("LFG status")
+    print(f"Session: {session_name(files.project)}")
+    print(f"Runtime: {files.project.runtime_directory}")
+    print()
+    _section("Tmux panes")
+    _table(
+        ["Pane", "Title", "PID", "Dead"],
+        [[row["pane"], row["title"], row["pid"], row["dead"]] for row in pane_rows],
+    )
     return 0
 
 
@@ -341,22 +669,33 @@ def cmd_observability(_args: argparse.Namespace) -> int:
     _, files = configured_project(Path.cwd())
     workflow = load_workflow(files.project.runtime_directory)
     profile = load_session_profile(files.project)
-    payload = {
-        "dashboard": render_dashboard(files),
-        "workflow": workflow.__dict__,
-        "agents": [
-            {
-                "agent_id": agent.agent_id,
-                "role": agent.role,
-                "state": agent.state,
-                "model_ref": agent.model_profile.model_ref,
-                "quota": load_quota(files.project.runtime_directory, agent).__dict__,
-            }
+    print(render_dashboard(files), end="")
+    print()
+    _section("Workflow")
+    print(f"State: {workflow.node}")
+    print(f"Updated: {time.ctime(workflow.updated_at)}")
+    print()
+    _section("Agents and quotas")
+    _table(
+        ["Agent", "Role", "State", "Model", "Remaining", "Confidence"],
+        [
+            [
+                agent.agent_id,
+                agent.role,
+                agent.state,
+                agent.model_profile.model_ref,
+                load_quota(files.project.runtime_directory, agent).remaining_percent,
+                load_quota(files.project.runtime_directory, agent).confidence,
+            ]
             for agent in profile.agents
         ],
-        "tmux": {"session": session_name(files.project), "panes": panes(files.project)},
-    }
-    print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    )
+    print()
+    _section("Tmux")
+    _table(
+        ["Pane", "Title", "Dead"],
+        [[row["pane"], row["title"], row["dead"]] for row in panes(files.project)],
+    )
     return 0
 
 
@@ -386,7 +725,7 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
     payload["coordination"]["mailbox"] = str(
         files.project.runtime_directory / "state" / "hermes-mailbox.jsonl"
     )
-    print(json.dumps(payload, indent=2, sort_keys=True))
+    _print_doctor(payload)
     return 0
 
 
@@ -438,15 +777,59 @@ def cmd_handoff(args: argparse.Namespace) -> int:
 
 
 def cmd_model_list(_args: argparse.Namespace) -> int:
-    print(json.dumps(list_models(), indent=2, sort_keys=True))
+    models = list_models()
+    antigravity = AntigravityClaudePlanner().doctor()
+    for model in antigravity.available_models:
+        ref = f"antigravity:{_model_slug(model)}"
+        if ref not in {item["ref"] for item in models}:
+            models.append(
+                {
+                    "ref": ref,
+                    "role_hint": "coder/planner",
+                    "transport": "cli",
+                    "notes": f"Discovered by agy models: {model}",
+                }
+            )
+    _section("Available model refs")
+    _table(
+        ["Model ref", "Role", "Transport", "Notes"],
+        [
+            [item["ref"], item["role_hint"], item["transport"], item["notes"]]
+            for item in models
+        ],
+    )
     return 0
+
+
+def _model_slug(model: str) -> str:
+    return (
+        model.lower()
+        .replace("(", "")
+        .replace(")", "")
+        .replace("/", "-")
+        .replace(" ", "-")
+        .replace("--", "-")
+    )
 
 
 def cmd_model_doctor(_args: argparse.Namespace) -> int:
     _, files = configured_project(Path.cwd())
     profile = load_session_profile(files.project)
     refs = [agent.model_profile.model_ref for agent in profile.agents]
-    print(json.dumps(validate_model_refs(refs), indent=2, sort_keys=True))
+    _section("Configured model refs")
+    _table(
+        ["Ref", "Status", "Provider", "Model", "Base URL"],
+        [
+            [
+                item["ref"],
+                _status(item["status"]),
+                item.get("provider", "-"),
+                item.get("model", "-"),
+                item.get("base_url", "-"),
+            ]
+            for item in validate_model_refs(refs)
+        ],
+    )
     return 0
 
 
@@ -455,7 +838,15 @@ def cmd_model_configure(args: argparse.Namespace) -> int:
     if args.model_ref:
         parse_model_ref(args.model_ref)
     path = ensure_runtime_secrets_file(files.project.runtime_directory)
-    print(json.dumps({"secrets_env": str(path), "model_ref": args.model_ref}, indent=2))
+    print("Model configuration")
+    print()
+    print(f"Validated model ref: {args.model_ref or 'none supplied'}")
+    print(f"Runtime secrets file: {path}")
+    print()
+    print(
+        "Put provider API keys in your shell environment or this ignored runtime file."
+    )
+    print("LFG stores env references such as env:OPENAI_API_KEY, not raw secrets.")
     return 0
 
 
@@ -554,22 +945,20 @@ def _create_swap_handoff(
 def cmd_agent_list(_args: argparse.Namespace) -> int:
     _, files = configured_project(Path.cwd())
     profile = load_session_profile(files.project)
-    print(
-        json.dumps(
+    _section("Agents")
+    _table(
+        ["Agent", "Role", "State", "Executor", "Model", "Active task"],
+        [
             [
-                {
-                    "agent_id": agent.agent_id,
-                    "role": agent.role,
-                    "state": agent.state,
-                    "executor_adapter": agent.executor_adapter,
-                    "model_ref": agent.model_profile.model_ref,
-                    "active_task": agent.active_task,
-                }
-                for agent in profile.agents
-            ],
-            indent=2,
-            sort_keys=True,
-        )
+                agent.agent_id,
+                agent.role,
+                agent.state,
+                agent.executor_adapter,
+                agent.model_profile.model_ref,
+                agent.active_task,
+            ]
+            for agent in profile.agents
+        ],
     )
     return 0
 
@@ -649,18 +1038,22 @@ def cmd_agent_state(args: argparse.Namespace, state: str) -> int:
 def cmd_quota_status(_args: argparse.Namespace) -> int:
     _, files = configured_project(Path.cwd())
     profile = load_session_profile(files.project)
-    print(
-        json.dumps(
+    _section("Quota status")
+    _table(
+        ["Agent", "Provider", "Model", "Used", "Limit", "Remaining", "Confidence"],
+        [
             [
-                {
-                    "agent_id": agent.agent_id,
-                    **load_quota(files.project.runtime_directory, agent).__dict__,
-                }
-                for agent in profile.agents
-            ],
-            indent=2,
-            sort_keys=True,
-        )
+                agent.agent_id,
+                quota.provider,
+                quota.model,
+                quota.used_tokens,
+                quota.limit_tokens,
+                quota.remaining_percent,
+                quota.confidence,
+            ]
+            for agent in profile.agents
+            for quota in [load_quota(files.project.runtime_directory, agent)]
+        ],
     )
     return 0
 
@@ -675,7 +1068,9 @@ def cmd_quota_set(args: argparse.Namespace) -> int:
         remaining_percent=args.remaining_percent,
         confidence="manual",
     )
-    print(json.dumps(quota.__dict__, indent=2, sort_keys=True))
+    print(f"Updated quota for {args.agent_id}")
+    print(f"Provider/model: {quota.provider}:{quota.model}")
+    print(f"Remaining: {quota.remaining_percent:g}% ({quota.confidence})")
     return 0
 
 
@@ -850,6 +1245,9 @@ def build_parser() -> argparse.ArgumentParser:
     init = sub.add_parser("init")
     init.add_argument("--yes", action="store_true")
     init.set_defaults(func=cmd_init)
+    setup = sub.add_parser("setup")
+    setup.add_argument("--yes", action="store_true")
+    setup.set_defaults(func=cmd_setup)
     adopt = sub.add_parser("adopt")
     adopt.add_argument("repository", nargs="?")
     adopt.add_argument("--dry-run", action="store_true")
@@ -862,6 +1260,7 @@ def build_parser() -> argparse.ArgumentParser:
         ("status", cmd_status),
         ("dashboard", cmd_dashboard),
         ("observability", cmd_observability),
+        ("observe", cmd_observability),
         ("logs", cmd_logs),
         ("doctor", cmd_doctor),
         ("config", cmd_config),
@@ -882,6 +1281,7 @@ def build_parser() -> argparse.ArgumentParser:
     start.set_defaults(func=cmd_start)
     launch = sub.add_parser("launch")
     launch.add_argument("--profile")
+    launch.add_argument("--preset", choices=sorted(LAUNCH_PRESETS))
     launch.add_argument("--no-attach", action="store_true")
     launch.set_defaults(func=cmd_launch)
     sub.add_parser("attach").set_defaults(func=cmd_attach)

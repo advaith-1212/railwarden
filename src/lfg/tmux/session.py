@@ -50,6 +50,7 @@ def launch_layout(
     root = shlex.quote(str(config.repository_root))
     log_dir = shlex.quote(str(config.runtime_directory / "logs"))
     hermes_command = " ".join(shlex.quote(item) for item in hermes_profile.command)
+    observability_loop = _portable_status_loop("lfg observability")
     specs = [
         PaneSpec(
             "controller",
@@ -68,13 +69,13 @@ def launch_layout(
         PaneSpec(
             "integration",
             "Integration | role=integrator exec=lfg provider=git model=deterministic | healthy",
-            f"cd {root} && watch -n 5 lfg observability",
+            f"cd {root} && {observability_loop}",
             "factory",
         ),
         PaneSpec(
             "observability",
             "Observability | role=monitor exec=lfg provider=langgraph model=state | healthy",
-            f"cd {root} && watch -n 5 lfg observability",
+            f"cd {root} && {observability_loop}",
             "observability",
         ),
     ]
@@ -231,7 +232,7 @@ def create_session(
         codex: f"cd {root!r} && lfg worker codex 2>&1 | tee -a {str(log_dir / 'codex-worker.log')!r}",
         gemini: f"cd {root!r} && lfg worker antigravity 2>&1 | tee -a {str(log_dir / 'antigravity-worker.log')!r}",
         composer: f"cd {root!r} && lfg worker composer 2>&1 | tee -a {str(log_dir / 'composer-worker.log')!r}",
-        status: f"cd {root!r} && watch -n 5 lfg dashboard",
+        status: f"cd {root!r} && {_portable_status_loop('lfg dashboard')}",
     }
     for pane, command in commands.items():
         tmux(["send-keys", "-t", pane, command, "C-m"])
@@ -250,6 +251,7 @@ def create_session(
         },
     )
     if attach:
+        tmux(["select-window", "-t", f"{name}:factory"])
         subprocess.run(["tmux", "attach-session", "-t", name], check=False)
     return name
 
@@ -330,8 +332,20 @@ def _create_v2_session(
         },
     )
     if attach:
+        tmux(["select-window", "-t", f"{name}:factory"])
         subprocess.run(["tmux", "attach-session", "-t", name], check=False)
     return name
+
+
+def _portable_status_loop(command: str) -> str:
+    quoted = shlex.quote(command)
+    return (
+        "if command -v watch >/dev/null 2>&1; then "
+        f"watch -n 5 {quoted}; "
+        "else "
+        f"while true; do clear; date; sh -c {quoted}; sleep 5; done; "
+        "fi"
+    )
 
 
 def stop_session(config: ProjectConfig) -> bool:

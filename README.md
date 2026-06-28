@@ -9,18 +9,33 @@ LFG is not a TMOM feature and is not nested inside a product repository. TMOM's 
 ```bash
 cd /path/to/lfg
 uv tool install --editable .
+lfg version
 ```
 
-Prerequisites: Python 3.12, Git, tmux, and provider CLIs as needed:
-`agy` for Claude Opus 4.6 Thinking planning and Gemini workers, `codex`
-for GPT-5.5 High workers, and `grok` for Composer 2.5 workers.
+To upgrade an editable install after pulling new commits:
+
+```bash
+uv tool install --editable . --force
+```
+
+Prerequisites:
+
+- Python 3.12 and Git
+- tmux for the terminal workspace
+- Hermes Agent (`hermes`) for the orchestration console
+- Provider CLIs as needed: `codex`, `agy`, and `grok`
+
+Run `lfg doctor` inside a configured project to see exactly what is installed,
+what is missing, whether Hermes can see the LFG MCP tools, and whether runtime
+state is ignored by git.
 
 ## Workflow
 
 ```bash
 cd /path/to/project
-lfg init --yes
-lfg start
+lfg setup --yes
+lfg doctor
+lfg launch
 ```
 
 For an existing repository:
@@ -30,9 +45,19 @@ lfg adopt --dry-run /path/to/project
 lfg start
 ```
 
-`lfg` with no subcommand starts or attaches to the project tmux workspace. The workspace has six panes: Factory Controller, Hermes Console, Codex - GPT-5.5 High, Antigravity - Gemini 3.1 Pro High, Grok Composer 2.5, and DAG / Queue / Integration Status.
+`lfg launch` starts or attaches to the project tmux workspace. The default
+launch preset starts a `factory` window with Hermes, the LFG controller,
+workers, and integration status, plus an `observability` window for DAG,
+workflow, git, quota, event, and log state. LFG attaches to the `factory`
+window by default so Hermes is the first thing you see.
 
-Hermes is the coordination surface. In the Hermes pane you can submit `goal <text>`, review the generated plan, then run `approve plan` to allow unattended execution. You can also inspect `status`, `dag`, `agents`, `tasks`, and `logs`; route instructions with `codex: ...`, `gemini: ...`, `composer: ...`, or `broadcast: ...`; and use `handoff <task_id> [provider]`, `retry <task_id>`, `block <task_id>`, and `unblock <task_id>` for manual intervention.
+Hermes is the coordination surface. Tell Hermes what to build in normal
+language. LFG exposes durable factory actions to Hermes through MCP tools such
+as `lfg.goal.submit`, `lfg.plan.approve`, `lfg.task.list`, `lfg.agent.swap`,
+and `lfg.checkpoint.create`.
+
+Use `lfg observe` or `lfg observability` for a readable terminal view of the
+DAG, workflow state, tmux panes, agents, and quotas.
 
 ## Planning Approval
 

@@ -10,9 +10,9 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 from lfg.config.models import ProjectConfig
-from lfg.hermes.profile import hermes_executable
+from lfg.hermes.profile import generate_hermes_profile, hermes_executable
 from lfg.providers.adapters import ProviderAdapter
-from lfg.runtime.session import AgentInstance, load_session_profile
+from lfg.runtime.session import AgentInstance, SessionProfile, load_session_profile
 from lfg.runtime.typed_agents import pydanticai_available
 from lfg.runtime.workflow import langgraph_available
 
@@ -45,6 +45,7 @@ def doctor_report(
         "endpoints": _endpoint_status(profile.agents),
         "coordination": {
             "mcp": _mcp_status(config.repository_root),
+            "hermes_profile": _hermes_profile_status(config, profile),
             "runtime_ignored": _path_ignored(
                 config.repository_root, config.runtime_directory
             ),
@@ -186,6 +187,41 @@ def _mcp_status(repository: Path) -> dict[str, object]:
         "tool_count": tool_count,
         "transport": "mcp-stdio",
     }
+
+
+def _hermes_profile_status(
+    config: ProjectConfig, profile: SessionProfile
+) -> dict[str, object]:
+    executable = hermes_executable()
+    if executable is None:
+        return {
+            "status": "skipped",
+            "reason": "Hermes executable is not installed",
+        }
+    hermes_profile = generate_hermes_profile(config, profile)
+    env = os.environ.copy()
+    env["HERMES_HOME"] = str(hermes_profile.home)
+    completed = subprocess.run(
+        [executable, "mcp", "test", "lfg"],
+        cwd=config.repository_root,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=20,
+        check=False,
+    )
+    output = f"{completed.stdout}\n{completed.stderr}".strip()
+    return {
+        "status": "healthy" if completed.returncode == 0 else "failed",
+        "returncode": completed.returncode,
+        "home": str(hermes_profile.home),
+        "command": " ".join(hermes_profile.command),
+        "mcp_test": _tail(output),
+    }
+
+
+def _tail(text: str, *, limit: int = 2000) -> str:
+    return text[-limit:]
 
 
 def _path_ignored(repository: Path, path: Path) -> bool:
