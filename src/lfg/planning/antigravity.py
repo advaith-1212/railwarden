@@ -33,12 +33,30 @@ class AntigravityClaudePlanner:
                 remaining_limitation="Antigravity CLI `agy` is not installed or not on PATH",
                 available_models=(),
             )
-        help_result = subprocess.run(
-            [path, "--help"], text=True, capture_output=True, check=False
-        )
-        models_result = subprocess.run(
-            [path, "models"], text=True, capture_output=True, check=False
-        )
+        try:
+            help_result = subprocess.run(
+                [path, "--help"],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=10,
+            )
+            models_result = subprocess.run(
+                [path, "models"],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=10,
+            )
+        except subprocess.TimeoutExpired:
+            return AntigravityPlannerStatus(
+                detected=True,
+                authenticated=None,
+                model_identifier=self.model,
+                verified_invocation=None,
+                remaining_limitation="Antigravity CLI probe timed out",
+                available_models=(),
+            )
         available_models = tuple(
             line.strip() for line in models_result.stdout.splitlines() if line.strip()
         )

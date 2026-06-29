@@ -4,7 +4,7 @@ from pathlib import Path
 
 import yaml
 
-from lfg.git import output, run_git
+from lfg.git import branch_exists, output, run_git
 from lfg.util.atomic import atomic_write_text
 
 
@@ -136,12 +136,45 @@ def initialize_project(repository_root: Path, *, yes: bool) -> dict[str, str]:
         atomic_write_text(config_dir / "state-schema-version", "1.0.0\n")
         ensure_context_templates(repository_root)
     proposal = ensure_gitignore(repository_root, yes=yes)
+    if yes:
+        ensure_integration_baseline(repository_root, "integration/lfg")
     branch = output(repository_root, "branch", "--show-current")
     return {
         "repository": str(repository_root),
         "branch": branch,
         "gitignore_proposal": proposal,
     }
+
+
+def ensure_integration_baseline(repository_root: Path, integration_branch: str) -> None:
+    has_head = (
+        run_git(repository_root, "rev-parse", "--verify", "HEAD", check=False).returncode
+        == 0
+    )
+    if not has_head:
+        run_git(repository_root, "add", ".gitignore", ".lfg", "context")
+        staged = run_git(
+            repository_root, "diff", "--cached", "--quiet", check=False
+        ).returncode
+        if staged != 0:
+            run_git(
+                repository_root,
+                "-c",
+                "user.name=LFG",
+                "-c",
+                "user.email=lfg@example.invalid",
+                "commit",
+                "-m",
+                "chore: initialize lfg",
+            )
+        has_head = (
+            run_git(
+                repository_root, "rev-parse", "--verify", "HEAD", check=False
+            ).returncode
+            == 0
+        )
+    if has_head and not branch_exists(repository_root, integration_branch):
+        run_git(repository_root, "branch", integration_branch)
 
 
 def ensure_context_templates(repository_root: Path) -> None:

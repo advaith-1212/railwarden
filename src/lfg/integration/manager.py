@@ -6,9 +6,10 @@ from typing import Any
 from lfg.config.models import ProjectConfig, ValidationCommand
 from lfg.errors import GitError, ValidationError
 from lfg.git import (
+    branch_exists,
     branch_is_ancestor,
+    current_branch,
     head,
-    output,
     run_git,
     tracked_is_clean,
     untracked_files,
@@ -33,65 +34,84 @@ def integrate_one(
         except BlockingIOError:
             raise GitError("Another integration manager is already running")
         repository = config.repository_root
-        if output(repository, "branch", "--show-current") != config.integration_branch:
-            raise GitError(f"Repository must be on {config.integration_branch}")
+        original_branch = current_branch(repository)
         if not tracked_is_clean(repository):
             raise GitError("Integration repository has tracked changes before merge")
+        if not branch_exists(repository, config.integration_branch):
+            raise GitError(f"Integration branch does not exist: {config.integration_branch}")
+        switched = False
+        if original_branch != config.integration_branch:
+            run_git(repository, "switch", config.integration_branch)
+            switched = True
         package_id = str(candidate["package_id"])
-        branch = str(candidate["branch"])
-        scheduled_head = str(candidate["head"])
-        actual_head = head(repository, branch)
-        if not actual_head.startswith(scheduled_head):
-            raise GitError(f"{package_id} head changed after scheduling")
-        if branch_is_ancestor(repository, branch, config.integration_branch):
-            raise GitError(f"{package_id} already merged")
-        before_head = head(repository)
-        payload: dict[str, Any] = {
-            "status": "planned",
-            "package_id": package_id,
-            "branch": branch,
-            "before_head": before_head,
-            "scheduled_head": scheduled_head,
-            "actual_head": actual_head,
-        }
-        if not execute:
-            return payload
-        before_untracked = untracked_files(repository)
-        merge = run_git(
-            repository, "merge", "--no-ff", "--no-edit", branch, check=False
-        )
-        if merge.returncode != 0:
-            run_git(repository, "merge", "--abort", check=False)
-            raise GitError(f"Merge failed for {package_id}: {merge.stderr}")
-        after_head = head(repository)
         try:
-            status, results, removed = run_validation_suite(
-                repository, validation_commands
-            )
-        except ValidationError as exc:
-            run_git(repository, "reset", "--hard", before_head, check=False)
-            removed = cleanup_new_untracked(repository, before_untracked, ())
-            raise ValidationError(
-                f"Post-merge validation failed for {package_id}; rolled back to {before_head}; cleanup={removed}: {exc}"
-            )
-        if status != "passed":
-            run_git(repository, "reset", "--hard", before_head, check=False)
-            removed = cleanup_new_untracked(repository, before_untracked, ())
-            raise ValidationError(
-                f"Post-merge validation failed for {package_id}; rolled back to {before_head}; cleanup={removed}"
-            )
-        payload.update(
-            {
-                "status": "merged_and_validated",
-                "after_head": after_head,
-                "validation": [result.to_dict() for result in results],
-                "cleanup": removed,
+            branch = str(candidate["branch"])
+            scheduled_head = str(candidate["head"])
+            actual_head = head(repository, branch)
+            if not actual_head.startswith(scheduled_head):
+                raise GitError(f"{package_id} head changed after scheduling")
+            if branch_is_ancestor(repository, branch, config.integration_branch):
+                raise GitError(f"{package_id} already merged")
+            before_head = head(repository)
+            payload: dict[str, Any] = {
+                "status": "planned",
+                "package_id": package_id,
+                "branch": branch,
+                "before_head": before_head,
+                "scheduled_head": scheduled_head,
+                "actual_head": actual_head,
+                "integration_branch": config.integration_branch,
+                "original_branch": original_branch,
             }
-        )
-        evidence_path = (
-            config.runtime_directory
-            / "validation"
-            / f"{package_id}-{after_head[:12]}.json"
-        )
-        atomic_write_json(evidence_path, payload)
-        return payload
+            if not execute:
+                if switched and original_branch:
+                    run_git(repository, "switch", original_branch)
+                return payload
+            before_untracked = untracked_files(repository)
+            merge = run_git(
+                repository, "merge", "--no-ff", "--no-edit", branch, check=False
+            )
+            if merge.returncode != 0:
+                run_git(repository, "merge", "--abort", check=False)
+                raise GitError(f"Merge failed for {package_id}: {merge.stderr}")
+            after_head = head(repository)
+            try:
+                status, results, removed = run_validation_suite(
+                    repository, validation_commands
+                )
+            except ValidationError as exc:
+                run_git(repository, "reset", "--hard", before_head, check=False)
+                removed = cleanup_new_untracked(repository, before_untracked, ())
+                raise ValidationError(
+                    f"Post-merge validation failed for {package_id}; rolled back to {before_head}; cleanup={removed}: {exc}"
+                )
+            if status != "passed":
+                run_git(repository, "reset", "--hard", before_head, check=False)
+                removed = cleanup_new_untracked(repository, before_untracked, ())
+                raise ValidationError(
+                    f"Post-merge validation failed for {package_id}; rolled back to {before_head}; cleanup={removed}"
+                )
+            payload.update(
+                {
+                    "status": "merged_and_validated",
+                    "after_head": after_head,
+                    "validation": [result.to_dict() for result in results],
+                    "cleanup": removed,
+                }
+            )
+            if switched and original_branch:
+                run_git(repository, "switch", original_branch)
+                run_git(repository, "merge", "--ff-only", config.integration_branch)
+                payload["fast_forwarded_branch"] = original_branch
+                payload["fast_forwarded_head"] = head(repository)
+            evidence_path = (
+                config.runtime_directory
+                / "validation"
+                / f"{package_id}-{after_head[:12]}.json"
+            )
+            atomic_write_json(evidence_path, payload)
+            return payload
+        except Exception:
+            if switched and original_branch and tracked_is_clean(repository):
+                run_git(repository, "switch", original_branch, check=False)
+            raise

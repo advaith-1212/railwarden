@@ -53,7 +53,7 @@ def branch_has_new_commits(
     except Exception:
         try:
             # Fallback to compare against the parent of the branch branching point
-            b_base = output(repository, "merge-base", branch, "integration/lfg")
+            b_base = output(repository, "merge-base", branch, base_branch)
             res = output(repository, "log", "--oneline", f"{b_base}..{branch}")
             return res.strip() != ""
         except Exception:
@@ -78,6 +78,7 @@ def classify_packages(
         and branch_has_new_commits(
             config.repository_root,
             overrides.get(package_id, package_branch(package)),
+            base_branch="main",
         )
         and branch_is_ancestor(
             config.repository_root,
@@ -98,6 +99,7 @@ def classify_packages(
         has_commits = branch_head is not None and branch_has_new_commits(
             config.repository_root,
             branch,
+            base_branch=config.integration_branch,
         )
         task = tasks.task_for_package(package_id)
         task_id = str(task["id"]) if task and task.get("id") else None

@@ -20,12 +20,27 @@ from lfg.validation.paths import validate_owned_paths
 SCHEMA: dict[str, Any] = {
     "type": "object",
     "required": [
+        "schema_version",
         "task_id",
+        "worker",
+        "model",
         "status",
+        "summary",
     ],
     "properties": {
+        "schema_version": {"type": "string"},
         "task_id": {"type": "string", "minLength": 1},
+        "worker": {"type": "string", "minLength": 1},
+        "model": {"type": "string", "minLength": 1},
         "status": {"type": "string", "minLength": 1},
+        "summary": {"type": "string"},
+        "workspace": {"type": "string"},
+        "branch": {"type": "string"},
+        "commit_hash": {"type": "string"},
+        "changed_files": {"type": "array", "items": {"type": "string"}},
+        "tests": {"type": "array", "items": {"type": "object"}},
+        "blockers": {"type": "array", "items": {"type": "string"}},
+        "evidence": {"type": "array"},
     },
 }
 

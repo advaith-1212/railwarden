@@ -18,13 +18,6 @@ FAILURE_PATTERNS: dict[str, tuple[str, ...]] = {
         "out of credits",
     ),
     "rate_limited": ("rate limit", "too many requests", "http 429", "retry-after"),
-    "authentication": (
-        "authentication required",
-        "invalid access token",
-        "unauthorized",
-        "login required",
-        "expired token",
-    ),
     "capacity": (
         "provider overloaded",
         "capacity unavailable",
@@ -37,12 +30,31 @@ FAILURE_PATTERNS: dict[str, tuple[str, ...]] = {
         "permission denied .git",
     ),
     "workspace_permission": ("operation not permitted", "permission denied"),
+    "result_path_unwritable": (
+        "output-last-message",
+        "expected result json path",
+        "result json cannot be placed",
+        "blocked_by_sandbox",
+        ".lfg-runtime/results",
+    ),
+    "authentication": (
+        "authentication required",
+        "invalid access token",
+        "unauthorized",
+        "login required",
+        "expired token",
+    ),
     "test_failure": ("pytest", "test failed", "assertionerror"),
 }
 
 
 def classify_failure(text: str) -> tuple[str, bool, bool, str | None]:
     normalized = text.lower()
+    if (
+        ("result json" in normalized or "output-last-message" in normalized)
+        and ("sandbox" in normalized or ".lfg-runtime/results" in normalized)
+    ):
+        return "result_path_unwritable", False, False, "result json sandbox"
     for kind, patterns in FAILURE_PATTERNS.items():
         for pattern in patterns:
             if pattern in normalized:

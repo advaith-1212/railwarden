@@ -201,15 +201,23 @@ def _hermes_profile_status(
     hermes_profile = generate_hermes_profile(config, profile)
     env = os.environ.copy()
     env["HERMES_HOME"] = str(hermes_profile.home)
-    completed = subprocess.run(
-        [executable, "mcp", "test", "lfg"],
-        cwd=config.repository_root,
-        env=env,
-        text=True,
-        capture_output=True,
-        timeout=20,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            [executable, "mcp", "test", "lfg"],
+            cwd=config.repository_root,
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "failed",
+            "home": str(hermes_profile.home),
+            "command": " ".join(hermes_profile.command),
+            "mcp_test": "Hermes MCP test timed out after 10s",
+        }
     output = f"{completed.stdout}\n{completed.stderr}".strip()
     return {
         "status": "healthy" if completed.returncode == 0 else "failed",

@@ -56,6 +56,7 @@ def generate_hermes_profile(
     config_path = home / "config.yaml"
     mcp_config_path = home / "mcp.json"
     env_path = ensure_runtime_secrets_file(home)
+    _inherit_existing_auth(home)
     skill_dirs = [
         str(config.repository_root / ".lfg" / "skills"),
         str(config.runtime_directory / "skills"),
@@ -144,6 +145,31 @@ def _hermes_provider(provider: str) -> str:
     return mapping.get(provider, provider)
 
 
+def _inherit_existing_auth(home: Path) -> None:
+    target = home / "auth.json"
+    source = Path.home() / ".hermes" / "auth.json"
+    if not source.exists():
+        return
+    if target.exists() and _has_provider_auth(target):
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, target)
+
+
+def _has_provider_auth(path: Path) -> bool:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    providers = payload.get("providers")
+    credential_pool = payload.get("credential_pool")
+    if isinstance(providers, dict) and providers:
+        return True
+    return isinstance(credential_pool, dict) and "openai-codex" in credential_pool
+
+
 def _instructions(config: ProjectConfig, session: SessionProfile) -> str:
     workers = "\n".join(
         f"- {agent.agent_id}: {agent.model_profile.model_ref} via {agent.executor_adapter}"
@@ -159,8 +185,17 @@ Repository: {config.repository_root}
 Runtime: {config.runtime_directory}
 Integration branch: {config.integration_branch}
 
-Use the LFG MCP tools for factory state changes. Do not write raw secrets to
-tracked files, logs, fixtures, snapshots, or errors.
+Use the LFG MCP tools for factory state changes. For repository goals, your job
+is orchestration only:
+- On `goal ...`, call LFG goal/plan tools and present the plan for approval.
+- On `approved`, call LFG approval/freeze tools and let the controller dispatch
+  workers.
+- Do not edit repository files directly.
+- Do not run implementation commands directly.
+- Do not create code, tests, package files, or dev servers from the Hermes pane.
+- If direct implementation seems necessary, route it as an LFG work package.
+
+Do not write raw secrets to tracked files, logs, fixtures, snapshots, or errors.
 
 Workers:
 {workers or "- none"}

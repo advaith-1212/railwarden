@@ -73,6 +73,10 @@ def _result_path(config: ProjectConfig, task_id: str) -> Path:
     return config.runtime_directory / "results" / f"{task_id}.json"
 
 
+def _worker_result_path(workspace: Path, task_id: str) -> Path:
+    return workspace / ".lfg-results" / f"{task_id}.json"
+
+
 def _log_path(config: ProjectConfig, task_id: str, attempt: int, provider: str) -> Path:
     return config.runtime_directory / "logs" / f"{task_id}-{attempt}-{provider}.log"
 
@@ -146,6 +150,32 @@ Risk / merge policy:
 
 Workspace: {workspace}
 Expected result JSON path: {result_path}
+
+Result JSON schema:
+{{
+  "schema_version": "1.0.0",
+  "task_id": "{task["id"]}",
+  "worker": "<agent id or provider>",
+  "model": "<model identifier>",
+  "status": "completed",
+  "summary": "<brief implementation summary>",
+  "workspace": "{workspace}",
+  "branch": "<current branch>",
+  "commit_hash": "<HEAD commit hash after committing owned changes>",
+  "changed_files": ["<paths changed in the commit>"],
+  "tests": [
+    {{"command": "<command>", "status": "passed", "summary": "<short result>"}}
+  ],
+  "blockers": [],
+  "evidence": []
+}}
+
+Rules for worker result:
+- Write JSON exactly to the expected path above.
+- Commit completed owned-path changes before writing a completed result.
+- Do not commit the result JSON file.
+- Use `status: "blocked"` with blockers if the task cannot be completed.
+- `tests` must not contain `failed` or `not_run` entries for a completed task.
 
 Available skills:
 {skill_refs or "- none"}
@@ -243,6 +273,7 @@ def _handoff_or_block(
     log_path: Path | None,
 ) -> dict[str, Any]:
     config = files.project
+    _set_provider_agent_ready(files, provider, active_task=str(task.get("id")))
     next_providers = eligible_providers(config, package, exclude={provider})
     next_provider = next_providers[0] if next_providers else None
     checkpoint = _checkpoint_preserved_work(config, task, package, workspace)
@@ -325,6 +356,13 @@ def reconcile_processes(files: ProjectFiles) -> list[dict[str, Any]]:
             str(task.get("result_path", _result_path(config, str(task["id"]))))
         )
         if result_path.exists():
+            runtime_result = task.get("runtime_result_path")
+            if runtime_result and str(runtime_result) != str(result_path):
+                runtime_path = Path(str(runtime_result))
+                runtime_path.parent.mkdir(parents=True, exist_ok=True)
+                runtime_path.write_text(
+                    result_path.read_text(encoding="utf-8"), encoding="utf-8"
+                )
             transition_task(config.runtime_directory, task, "validating")
             advance_workflow(config.runtime_directory, "PACKAGE_VALIDATION")
             result = load_worker_result(result_path)
@@ -398,6 +436,7 @@ def reconcile_processes(files: ProjectFiles) -> list[dict[str, Any]]:
                     )
                     continue
                 record_success(config.runtime_directory, provider)
+                _set_provider_agent_ready(files, provider, active_task=str(task["id"]))
                 next_status = (
                     "merge_ready"
                     if requires_human_merge_approval(package)
@@ -416,6 +455,7 @@ def reconcile_processes(files: ProjectFiles) -> list[dict[str, Any]]:
                     },
                 )
             elif result.get("status") == "blocked":
+                _set_provider_agent_ready(files, provider, active_task=str(task["id"]))
                 transition_task(
                     config.runtime_directory,
                     task,
@@ -423,6 +463,7 @@ def reconcile_processes(files: ProjectFiles) -> list[dict[str, Any]]:
                     {"blockers": result.get("blockers", [])},
                 )
             else:
+                _set_provider_agent_ready(files, provider, active_task=str(task["id"]))
                 transition_task(
                     config.runtime_directory, task, "failed", {"result": result}
                 )
@@ -454,6 +495,7 @@ def reconcile_processes(files: ProjectFiles) -> list[dict[str, Any]]:
             not is_clean(workspace) or branch_exists(config.repository_root, branch)
         )
         if dirty_or_branch and config.execution_preserve_partial_work_on_handoff:
+            _set_provider_agent_ready(files, provider, active_task=str(task["id"]))
             _handoff_or_block(
                 files,
                 task,
@@ -466,6 +508,7 @@ def reconcile_processes(files: ProjectFiles) -> list[dict[str, Any]]:
                 log_path=log_path,
             )
         else:
+            _set_provider_agent_ready(files, provider, active_task=str(task["id"]))
             transition_task(
                 config.runtime_directory,
                 task,
@@ -498,7 +541,9 @@ def launch_task(
     )
     attempt = int(task.get("attempt", 0)) + 1
     task["attempt"] = attempt
-    result_path = _result_path(config, str(task["id"]))
+    runtime_result_path = _result_path(config, str(task["id"]))
+    result_path = _worker_result_path(workspace, str(task["id"]))
+    result_path.parent.mkdir(parents=True, exist_ok=True)
     prompt_path = _write_prompt(config, package, task, workspace, result_path)
     log_path = _log_path(config, str(task["id"]), attempt, provider)
     command = adapter.launch_command(workspace, prompt_path, result_path)
@@ -508,6 +553,7 @@ def launch_task(
         "worktree": str(workspace),
         "prompt_path": str(prompt_path),
         "result_path": str(result_path),
+        "runtime_result_path": str(runtime_result_path),
         "log_path": str(log_path),
     }
     transition_task(config.runtime_directory, task, "assigned", payload)
@@ -588,6 +634,15 @@ def _agent_for_provider(files: ProjectFiles, provider: str) -> AgentInstance | N
         if agent.model_profile.provider == provider:
             return agent
     return None
+
+
+def _set_provider_agent_ready(
+    files: ProjectFiles, provider: str, *, active_task: str
+) -> None:
+    agent = _agent_for_provider(files, provider)
+    if agent is None or agent.active_task not in {None, active_task}:
+        return
+    _set_agent_runtime_state(files.project, agent, state="ready", active_task=None)
 
 
 def _reviewer_provider_for(

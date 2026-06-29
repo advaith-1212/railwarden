@@ -23,9 +23,22 @@ class ProviderAdapter:
                 "status": "unavailable",
                 "reason": f"{self.executable} not found",
             }
-        help_result = subprocess.run(
-            [path, "--help"], text=True, capture_output=True, check=False
-        )
+        try:
+            help_result = subprocess.run(
+                [path, "--help"],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=10,
+            )
+        except subprocess.TimeoutExpired:
+            return {
+                "name": self.name,
+                "status": "degraded",
+                "executable": path,
+                "model": self.model,
+                "reason": f"{self.executable} --help timed out",
+            }
         return {
             "name": self.name,
             "status": "healthy" if help_result.returncode == 0 else "degraded",

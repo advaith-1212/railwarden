@@ -10,6 +10,7 @@ from lfg.config.init import initialize_project
 from lfg.config.loader import load_project_files
 from lfg.engine.controller import controller_tick
 from lfg.engine.dashboard import render_dashboard
+from lfg.providers.health import classify_failure
 from lfg.runtime.tasks import load_tasks, save_tasks
 
 
@@ -43,6 +44,31 @@ def _approve(repo: Path) -> None:
     )
 
 
+def test_setup_initializes_fresh_repo_baseline(tmp_path: Path) -> None:
+    repo = tmp_path / "fresh"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True)
+
+    initialize_project(repo, yes=True)
+
+    head = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "--verify", "HEAD"],
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.strip()
+    integration = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "integration/lfg"],
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.strip()
+
+    assert head == integration
+    assert (repo / ".lfg" / "project.yaml").exists()
+    assert (repo / "context" / "PROJECT_CONTEXT.md").exists()
+
+
 def test_controller_waits_for_plan_approval(git_repo: Path) -> None:
     initialize_project(git_repo, yes=True)
     _write_package(git_repo)
@@ -72,6 +98,8 @@ def test_controller_assigns_ready_task_by_provider_priority(git_repo: Path) -> N
     task = load_tasks(files.project.runtime_directory)[0]
     assert task["status"] == "assigned"
     assert task["provider"] == "codex"
+    assert ".lfg-results" in task["result_path"]
+    assert ".lfg-runtime/results" in task["runtime_result_path"]
 
 
 def test_dashboard_renders_runtime_state(git_repo: Path) -> None:
@@ -146,6 +174,7 @@ def test_controller_runs_lfg_validation_and_review_before_merge(
     result_path.write_text(
         json.dumps(
             {
+                "schema_version": "1.0.0",
                 "task_id": "task-WP-1",
                 "worker": "codex",
                 "model": "gpt-5.5",
@@ -177,6 +206,19 @@ def test_controller_runs_lfg_validation_and_review_before_merge(
     assert Path(updated["package_validation"]["evidence_path"]).exists()
     assert updated["review"]["status"] == "passed"
     assert Path(updated["review"]["evidence_path"]).exists()
+
+
+def test_result_path_sandbox_failure_is_not_auth() -> None:
+    kind, transient, requires_human, pattern = classify_failure(
+        "Codex could not write output-last-message to "
+        "/repo/.lfg-runtime/results/task.json because the sandbox blocked "
+        "the result JSON path. invalid access token from unrelated MCP server"
+    )
+
+    assert kind == "result_path_unwritable"
+    assert transient is False
+    assert requires_human is False
+    assert pattern == "result json sandbox"
 
 
 def test_dead_quota_process_creates_handoff_and_reassigns(git_repo: Path) -> None:

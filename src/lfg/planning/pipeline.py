@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import time
 from dataclasses import dataclass
@@ -39,15 +40,43 @@ Create a software implementation plan and DAG work packages for this goal.
 Goal:
 {goal}
 
-Return a human-readable markdown implementation plan for Hermes to review.
+Return strict JSON only. No prose and no markdown fence.
+
+Required shape:
+{{
+  "plan_markdown": "<human-readable implementation plan for Hermes to review>",
+  "work_packages": [
+    {{
+      "id": "WP-001",
+      "name": "Short name",
+      "objective": "Concrete implementation objective",
+      "dependencies": [],
+      "owned_paths": [],
+      "forbidden_paths": [],
+      "acceptance_tests": [],
+      "acceptance_criteria": [],
+      "validation_commands": [],
+      "preferred_providers": [],
+      "model_profile": null,
+      "reviewer_profile": null,
+      "risk_level": "medium",
+      "context_refs": [],
+      "merge_policy": "auto_after_review",
+      "approval_required": false,
+      "review_required": true,
+      "branch": null,
+      "worktree": null,
+      "status_notes": null
+    }}
+  ]
+}}
+
 Focus on:
 - concrete work packages
 - dependencies between packages
 - owned paths and forbidden paths
 - acceptance checks
 - provider hints when they are useful
-
-Do not optimize for strict machine-readable formatting in this response.
 """
 
 
@@ -237,7 +266,19 @@ def _planner_text(
 ) -> tuple[str, dict[str, Any]]:
     planner = AntigravityClaudePlanner(config.planner_model)
     command = planner.command(repository=config.repository_root, prompt=prompt)
-    completed = subprocess.run(command, text=True, capture_output=True, check=False)
+    timeout = float(os.environ.get("LFG_PLANNER_TIMEOUT_SECONDS", "300"))
+    try:
+        completed = subprocess.run(
+            command,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise LfgError(
+            f"Planner timed out after {timeout:g}s during {purpose}"
+        ) from exc
     evidence = {
         "provider": config.planner_provider,
         "model": config.planner_model,
@@ -245,6 +286,7 @@ def _planner_text(
         "command": [*command[:6], "<prompt>"],
         "returncode": completed.returncode,
         "stderr": completed.stderr,
+        "timeout_seconds": timeout,
     }
     if completed.returncode != 0:
         raise LfgError(f"Planner failed: {completed.stderr.strip()}")

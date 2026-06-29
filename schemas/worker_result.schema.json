@@ -2,5 +2,68 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://lfg.local/schemas/worker-result.schema.json",
   "title": "LFG Worker Result",
-  "type": "object"
+  "type": "object",
+  "required": [
+    "schema_version",
+    "task_id",
+    "worker",
+    "model",
+    "status",
+    "summary"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string"
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "worker": {
+      "type": "string",
+      "minLength": 1
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "minLength": 1
+    },
+    "summary": {
+      "type": "string"
+    },
+    "workspace": {
+      "type": "string"
+    },
+    "branch": {
+      "type": "string"
+    },
+    "commit_hash": {
+      "type": "string"
+    },
+    "changed_files": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "tests": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "blockers": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "evidence": {
+      "type": "array"
+    }
+  },
+  "additionalProperties": true
 }

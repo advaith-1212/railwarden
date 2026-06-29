@@ -207,6 +207,45 @@ def test_hermes_profile_generation_is_runtime_only(git_repo: Path) -> None:
     assert mcp["mcpServers"]["lfg"]["args"] == ["mcp", "serve"]
 
 
+def test_hermes_profile_inherits_existing_auth(
+    git_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    hermes_home = home / ".hermes"
+    hermes_home.mkdir(parents=True)
+    (hermes_home / "auth.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "providers": {"openai-codex": {"kind": "oauth"}},
+                "credential_pool": {"openai-codex": {"kind": "oauth"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(home))
+    initialize_project(git_repo, yes=True)
+    files = load_project_files(git_repo)
+    profile = load_session_profile(files.project)
+    runtime_auth = files.project.runtime_directory / "hermes" / profile.name / "auth.json"
+    runtime_auth.parent.mkdir(parents=True, exist_ok=True)
+    runtime_auth.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "providers": {},
+                "credential_pool": {"copilot": {"kind": "oauth"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    hermes = generate_hermes_profile(files.project, profile)
+
+    inherited = json.loads((hermes.home / "auth.json").read_text(encoding="utf-8"))
+    assert sorted(inherited["providers"]) == ["openai-codex"]
+
+
 def test_mcp_tool_schemas_cover_required_tools() -> None:
     names = {schema["name"] for schema in tool_schemas()}
     assert {
@@ -398,7 +437,7 @@ def test_low_quota_prevents_new_task_launch(git_repo: Path) -> None:
     initialize_project(git_repo, yes=True)
     _write_package(git_repo)
     subprocess.run(
-        ["git", "-C", str(git_repo), "checkout", "-b", "integration/lfg"],
+        ["git", "-C", str(git_repo), "checkout", "integration/lfg"],
         check=True,
         capture_output=True,
     )
@@ -439,7 +478,7 @@ def test_checkpoint_filters_disallowed_files(git_repo: Path) -> None:
     initialize_project(git_repo, yes=True)
     _write_package(git_repo)
     subprocess.run(
-        ["git", "-C", str(git_repo), "checkout", "-b", "integration/lfg"],
+        ["git", "-C", str(git_repo), "checkout", "integration/lfg"],
         check=True,
         capture_output=True,
     )
@@ -482,7 +521,7 @@ def test_worker_prompt_includes_skills_and_mcp_routing(git_repo: Path) -> None:
     initialize_project(git_repo, yes=True)
     _write_package(git_repo)
     subprocess.run(
-        ["git", "-C", str(git_repo), "checkout", "-b", "integration/lfg"],
+        ["git", "-C", str(git_repo), "checkout", "integration/lfg"],
         check=True,
         capture_output=True,
     )
@@ -512,7 +551,7 @@ def test_agent_swap_creates_handoff_and_relaunches_with_override(
     initialize_project(git_repo, yes=True)
     _write_package(git_repo)
     subprocess.run(
-        ["git", "-C", str(git_repo), "checkout", "-b", "integration/lfg"],
+        ["git", "-C", str(git_repo), "checkout", "integration/lfg"],
         check=True,
         capture_output=True,
     )
@@ -558,7 +597,7 @@ def test_crash_resume_checkpoints_dirty_worktree_and_reassigns(git_repo: Path) -
     initialize_project(git_repo, yes=True)
     _write_package(git_repo)
     subprocess.run(
-        ["git", "-C", str(git_repo), "checkout", "-b", "integration/lfg"],
+        ["git", "-C", str(git_repo), "checkout", "integration/lfg"],
         check=True,
         capture_output=True,
     )
