@@ -39,9 +39,42 @@ refs for the installed adapters:
 - Antigravity worker: `antigravity:gemini-3.5-flash-low`
 - Composer worker: `composer:grok-composer-2.5-fast`
 
+## Guided Launch Setups
+
+`lfg launch` now defaults to a guided wizard instead of asking only for raw
+model refs. Each role presents provider options that match that runtime:
+
+- Hermes orchestrator: Codex, OpenAI, Anthropic, Gemini, Azure Foundry,
+  Ollama, or another OpenAI-compatible endpoint
+- Architect: Antigravity
+- Workers: the provider bound to that worker pane (`codex-1`, `antigravity-1`,
+  `composer-1`)
+- Reviewer/validator: API-backed providers such as OpenAI, Anthropic, Gemini,
+  Azure Foundry, Ollama, or another OpenAI-compatible endpoint
+
+When you create a setup, LFG asks only for the fields required by that
+provider. Example: Azure prompts for endpoint, API key, deployment/model name,
+and API version; Gemini prompts for the API key and model; Codex prompts only
+for the model/reasoning choice.
+
+Saved setups are user-global and reusable across repositories:
+
+- Registry: `~/.lfg/launch-setups.json`
+- Secret material: `~/.lfg/launch-setups.d/<setup>.json`
+
+Those saved setups are not committed to the repository. The repository-local
+session assignment still lives in `.lfg-runtime/state/session-profile.json`, so
+each project can choose different named setups even when they reuse the same
+global setup catalog.
+
 Hermes integration is generated under `.lfg-runtime/hermes/<profile>/` and is
 not tracked. LFG writes a Hermes-native `config.yaml` with `mcp_servers.lfg`,
 a `SOUL.md` identity file containing LFG factory instructions, and a local
 `skills/lfg-factory/SKILL.md` for discoverability. The launch command uses
 `HERMES_HOME=<runtime-profile> hermes chat --cli`; it does not pass unsupported
 `--config`, `--toolsets mcp`, or `--skills lfg-factory` flags.
+
+LFG also materializes the selected setup credentials into the generated runtime
+`secrets.env` and sources that file before starting Hermes, the controller, the
+worker panes, and observability panes. This means a named Azure/Gemini/OpenAI
+setup works in a fresh terminal without requiring you to re-export keys first.

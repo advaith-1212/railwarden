@@ -24,9 +24,12 @@ lfg launch
 prints readable checks for Hermes, tmux, provider CLIs, selected credentials,
 the generated Hermes profile, LFG MCP visibility, and git ignore rules.
 
-`lfg launch` uses the default dev-shop preset unless you pass `--preset` or
-choose `advanced` interactively. Worker panes are visible execution shells; the
-controller sends provider CLI commands into them when a tmux session exists.
+`lfg launch` uses the guided preset by default unless you pass `--preset`.
+The guided wizard lets you pick role-appropriate providers, create or reuse
+named saved setups, and enter only the fields required for that provider.
+Choose `advanced` only when you want to enter raw model refs directly. Worker
+panes are visible execution shells; the controller sends provider CLI commands
+into them when a tmux session exists.
 `lfg observe` and `lfg observability` render the live DAG, factory lifecycle,
 agents, quotas, tmux panes, provider health, validation/review evidence,
 integration queue, events, and Git graph.

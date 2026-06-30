@@ -82,6 +82,7 @@ class AgentInstance:
     role: AgentRole
     model_profile: ModelProfile
     executor_adapter: str
+    setup_name: str | None = None
     state: AgentState = "ready"
     quota_policy: QuotaPolicy = field(default_factory=QuotaPolicy)
     active_task: str | None = None
@@ -183,12 +184,19 @@ def default_session_profile(
     )
 
 
-def reset_agent_for_launch(agent: AgentInstance, *, model_ref: str) -> AgentInstance:
+def reset_agent_for_launch(
+    agent: AgentInstance,
+    *,
+    model_ref: str,
+    auth_ref: str | None = None,
+    setup_name: str | None = None,
+) -> AgentInstance:
     return AgentInstance(
         agent_id=agent.agent_id,
         role=agent.role,
-        model_profile=model_profile_from_ref(model_ref),
+        model_profile=model_profile_from_ref(model_ref, auth_ref=auth_ref),
         executor_adapter=agent.executor_adapter,
+        setup_name=setup_name,
         state="ready",
         quota_policy=agent.quota_policy,
         active_task=None,
@@ -304,6 +312,7 @@ def _agent_from_json(payload: dict[str, object]) -> AgentInstance:
         role=str(payload["role"]),  # type: ignore[arg-type]
         model_profile=_model_from_json(_mapping(payload["model_profile"])),
         executor_adapter=str(payload["executor_adapter"]),
+        setup_name=str(payload["setup_name"]) if payload.get("setup_name") else None,
         state=str(payload.get("state", "ready")),  # type: ignore[arg-type]
         quota_policy=_quota_policy_from_json(_mapping(payload.get("quota_policy", {}))),
         active_task=str(payload["active_task"]) if payload.get("active_task") else None,

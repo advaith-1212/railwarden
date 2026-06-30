@@ -19,6 +19,7 @@ from lfg.mcp.server import tool_schemas
 from lfg.models.registry import list_models, validate_model_refs
 from lfg.runtime.checkpoints import create_checkpoint_commit
 from lfg.runtime.doctor import doctor_report
+from lfg.runtime.launch_setups import load_launch_setups
 from lfg.runtime.model_refs import parse_model_ref
 from lfg.runtime.quota import update_usage
 from lfg.runtime.secrets import contains_secret, redacted
@@ -335,6 +336,7 @@ def test_tmux_launch_layout_has_factory_and_observability(git_repo: Path) -> Non
     assert any("role=coder exec=codex provider=codex" in spec.title for spec in specs)
     assert any("lfg observability" in spec.command for spec in specs)
     assert any("LFG worker pane ready: codex-1" in spec.command for spec in specs)
+    assert all("set -a;" in spec.command for spec in specs)
     assert not any("lfg worker codex" in spec.command for spec in specs)
     assert not any("watch -n 5 lfg observability" in spec.command for spec in specs)
 
@@ -397,6 +399,64 @@ def test_launch_wizard_persists_budget_quota_fallback_and_review_models(
     assert all(
         worker.quota_policy.manual_token_limit == 12345 for worker in profile.workers
     )
+
+
+def test_guided_launch_creates_named_setup_and_runtime_env(
+    git_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    initialize_project(git_repo, yes=True)
+    monkeypatch.chdir(git_repo)
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    def fake_create_session(*_args: object, **kwargs: object) -> str:
+        assert kwargs["profile"] is not None
+        assert kwargs["hermes_profile"] is not None
+        return "test-session"
+
+    monkeypatch.setattr(cli_main, "create_session", fake_create_session)
+    monkeypatch.setattr(cli_main.getpass, "getpass", lambda _prompt: "azure-secret")
+    monkeypatch.setattr(
+        "sys.stdin",
+        _TtyStringIO(
+            "\n".join(
+                [
+                    "guided",
+                    "guided",
+                    "create-new",
+                    "azure-foundry",
+                    "gpt-5.5",
+                    "azure-prod",
+                    "https://example.services.ai.azure.com/api/projects/demo",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                ]
+            )
+            + "\n"
+        ),
+    )
+
+    assert main(["launch", "--no-attach"]) == 0
+
+    profile = load_session_profile(load_project_files(git_repo).project)
+    assert profile.orchestrator.setup_name == "azure-prod"
+    assert profile.orchestrator.model_profile.model_ref == "azure-foundry:gpt-5.5"
+    assert profile.orchestrator.model_profile.auth_ref is not None
+
+    setups = load_launch_setups()
+    assert "azure-prod" in setups
+    assert setups["azure-prod"].provider == "azure-foundry"
+
+    hermes = generate_hermes_profile(load_project_files(git_repo).project, profile)
+    env_text = hermes.env_path.read_text(encoding="utf-8")
+    assert "AZURE_OPENAI_ENDPOINT" in env_text
+    assert "azure-secret" in env_text
+    assert "AZURE_FOUNDRY_API_KEY" in env_text
 
 
 def test_doctor_report_checks_credentials_endpoints_mcp_and_ignore(

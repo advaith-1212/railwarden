@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import os
 import subprocess
@@ -42,6 +43,13 @@ from lfg.runtime.checkpoints import create_checkpoint_commit
 from lfg.runtime.doctor import doctor_report
 from lfg.runtime.events import read_events
 from lfg.runtime.handoff import create_handoff_packet
+from lfg.runtime.launch_setups import (
+    LaunchSetup,
+    default_auth_env_var,
+    load_launch_setups,
+    save_launch_setup,
+    setup_summary,
+)
 from lfg.runtime.model_refs import parse_model_ref
 from lfg.runtime.quota import load_quota, update_usage
 from lfg.runtime.secrets import ensure_runtime_secrets_file
@@ -252,6 +260,167 @@ def _prompt_choice(default: str, label: str, choices: dict[str, str]) -> str:
     return value
 
 
+def _prompt_secret(label: str) -> str:
+    if not sys.stdin.isatty():
+        return ""
+    return getpass.getpass(f"{label}: ").strip()
+
+
+def _role_provider_key(agent: AgentInstance) -> str:
+    if agent.role == "coder":
+        return f"{agent.role}:{agent.executor_adapter}"
+    return agent.role
+
+
+def _role_label(agent: AgentInstance) -> str:
+    if agent.role == "coder":
+        return f"{agent.agent_id} ({agent.executor_adapter} worker)"
+    return f"{agent.agent_id} ({agent.role})"
+
+
+def _build_setup_choices(
+    agent: AgentInstance, setups: dict[str, LaunchSetup]
+) -> dict[str, str]:
+    provider_choices = ROLE_PROVIDER_CHOICES[_role_provider_key(agent)]
+    choices: dict[str, str] = {}
+    if agent.setup_name and agent.setup_name in setups:
+        choices[agent.setup_name] = f"Reuse current setup: {setup_summary(setups[agent.setup_name])}"
+    for name, setup in sorted(setups.items()):
+        if setup.provider not in provider_choices or name in choices:
+            continue
+        choices[name] = f"Saved setup: {setup_summary(setup)}"
+    choices["create-new"] = "Create a new named setup"
+    if not agent.setup_name:
+        choices["keep-current"] = f"Keep current raw ref: {agent.model_profile.model_ref}"
+    return choices
+
+
+def _select_setup_for_agent(
+    agent: AgentInstance,
+    *,
+    default_model_ref: str,
+    setups: dict[str, LaunchSetup],
+) -> tuple[str, str | None, str | None]:
+    if not sys.stdin.isatty():
+        return default_model_ref, agent.model_profile.auth_ref, agent.setup_name
+    choices = _build_setup_choices(agent, setups)
+    default_choice = (
+        agent.setup_name
+        if agent.setup_name and agent.setup_name in choices
+        else "keep-current"
+        if "keep-current" in choices
+        else "create-new"
+    )
+    selected = _prompt_choice(default_choice, f"{_role_label(agent)} setup", choices)
+    if selected == "keep-current":
+        return default_model_ref, agent.model_profile.auth_ref, None
+    if selected == "create-new":
+        setup = _create_named_setup(agent)
+        save_launch_setup(setup["setup"], env=setup["env"])
+        setups[setup["setup"].name] = setup["setup"]
+        return (
+            setup["setup"].model_ref,
+            f"env:{setup['setup'].auth_env_var}" if setup["setup"].auth_env_var else None,
+            setup["setup"].name,
+        )
+    setup = setups[selected]
+    return (
+        setup.model_ref,
+        f"env:{setup.auth_env_var}" if setup.auth_env_var else None,
+        setup.name,
+    )
+
+
+def _create_named_setup(agent: AgentInstance) -> dict[str, object]:
+    provider_choices = ROLE_PROVIDER_CHOICES[_role_provider_key(agent)]
+    provider = _prompt_choice(
+        next(iter(provider_choices)),
+        f"{_role_label(agent)} provider",
+        provider_choices,
+    )
+    model = _prompt_model(provider)
+    default_name = _default_setup_name(provider, model)
+    name = _prompt(default_name, f"{_role_label(agent)} setup name")
+    base_url = None
+    reasoning = None
+    auth_env_var = None
+    env: dict[str, str] = {}
+
+    if provider == "codex":
+        model, reasoning = _split_reasoning(model)
+    elif provider in {"openai", "anthropic", "gemini"}:
+        auth_env_var = default_auth_env_var(provider, name)
+        api_key = _prompt_secret(f"{provider} API key")
+        env[auth_env_var] = api_key
+        if provider == "openai":
+            env["OPENAI_API_KEY"] = api_key
+        elif provider == "anthropic":
+            env["ANTHROPIC_API_KEY"] = api_key
+        else:
+            env["GEMINI_API_KEY"] = api_key
+            env["GOOGLE_API_KEY"] = api_key
+    elif provider == "azure-foundry":
+        auth_env_var = default_auth_env_var(provider, name)
+        endpoint = _prompt("", "Azure endpoint URL")
+        api_key = _prompt_secret("Azure API key")
+        api_version = _prompt("2024-10-21", "Azure OpenAI API version")
+        env[auth_env_var] = api_key
+        env["AZURE_FOUNDRY_API_KEY"] = api_key
+        env["AZURE_OPENAI_API_KEY"] = api_key
+        env["AZURE_OPENAI_ENDPOINT"] = endpoint
+        env["AZURE_AI_FOUNDRY_ENDPOINT"] = endpoint
+        env["OPENAI_API_VERSION"] = api_version
+    elif provider == "ollama":
+        base_url = _prompt("http://localhost:11434", "Ollama base URL")
+    elif provider == "openai-compatible":
+        base_url = _prompt("https://api.example.com/v1", "OpenAI-compatible base URL")
+        auth_env_var = default_auth_env_var(provider, name)
+        api_key = _prompt_secret("OpenAI-compatible API key")
+        env[auth_env_var] = api_key
+        env["OPENAI_API_KEY"] = api_key
+
+    return {
+        "setup": LaunchSetup(
+            name=name,
+            provider=provider,
+            model=model,
+            reasoning_effort=reasoning,
+            base_url=base_url,
+            auth_env_var=auth_env_var,
+            env_vars=tuple(sorted(env)),
+        ),
+        "env": env,
+    }
+
+
+def _prompt_model(provider: str) -> str:
+    choices = MODEL_CHOICES[provider]
+    default = next(iter(choices))
+    value = _prompt_choice(default, f"{provider} model", choices)
+    if value == "custom":
+        return _prompt("", f"Custom {provider} model")
+    return value
+
+
+def _default_setup_name(provider: str, model: str) -> str:
+    text = f"{provider}-{model}"
+    return (
+        text.lower()
+        .replace("?", "-")
+        .replace("=", "-")
+        .replace("@", "-")
+        .replace(":", "-")
+        .replace("/", "-")
+    )
+
+
+def _split_reasoning(model: str) -> tuple[str, str | None]:
+    if "?reasoning=" not in model:
+        return model, None
+    name, _, reasoning = model.partition("?reasoning=")
+    return name, reasoning or None
+
+
 def _section(title: str) -> None:
     print(title)
     print("-" * len(title))
@@ -436,6 +605,12 @@ def _tool_note(row: dict[str, Any]) -> str:
 
 
 LAUNCH_PRESETS: dict[str, dict[str, str]] = {
+    "guided": {
+        "description": "Guided provider/setup wizard with saved named setups and provider-specific prompts.",
+        "orchestrator": "",
+        "architect": "",
+        "reviewer": "",
+    },
     "default-dev-shop": {
         "description": "Keep the current Hermes orchestrator profile, use Antigravity for planning, and Codex/Antigravity/Composer workers.",
         "orchestrator": "",
@@ -455,7 +630,7 @@ LAUNCH_PRESETS: dict[str, dict[str, str]] = {
         "reviewer": "ollama:qwen3-coder@http://localhost:11434",
     },
     "advanced": {
-        "description": "Ask for every model ref and quota setting.",
+        "description": "Expert mode: ask for raw model refs and quota settings.",
         "orchestrator": "",
         "architect": "",
         "reviewer": "",
@@ -470,18 +645,110 @@ FALLBACK_POLICIES = {
 }
 
 
+ROLE_PROVIDER_CHOICES: dict[str, dict[str, str]] = {
+    "orchestrator": {
+        "codex": "OpenAI Codex CLI",
+        "openai": "OpenAI API",
+        "anthropic": "Anthropic API",
+        "gemini": "Google Gemini API",
+        "azure-foundry": "Azure Foundry / Azure OpenAI",
+        "ollama": "Local Ollama",
+        "openai-compatible": "Custom OpenAI-compatible endpoint",
+    },
+    "architect": {
+        "antigravity": "Antigravity CLI",
+    },
+    "coder:codex": {
+        "codex": "OpenAI Codex CLI",
+    },
+    "coder:antigravity": {
+        "antigravity": "Antigravity CLI",
+    },
+    "coder:composer": {
+        "composer": "Composer CLI",
+    },
+    "reviewer": {
+        "openai": "OpenAI API",
+        "anthropic": "Anthropic API",
+        "gemini": "Google Gemini API",
+        "azure-foundry": "Azure Foundry / Azure OpenAI",
+        "ollama": "Local Ollama",
+        "openai-compatible": "Custom OpenAI-compatible endpoint",
+    },
+    "validator": {
+        "openai": "OpenAI API",
+        "anthropic": "Anthropic API",
+        "gemini": "Google Gemini API",
+        "azure-foundry": "Azure Foundry / Azure OpenAI",
+        "ollama": "Local Ollama",
+        "openai-compatible": "Custom OpenAI-compatible endpoint",
+    },
+}
+
+
+MODEL_CHOICES: dict[str, dict[str, str]] = {
+    "codex": {
+        "gpt-5.5?reasoning=high": "GPT-5.5 high reasoning",
+        "gpt-5.5?reasoning=medium": "GPT-5.5 medium reasoning",
+        "custom": "Enter a custom Codex model slug",
+    },
+    "antigravity": {
+        "claude-opus-4.6-thinking": "Claude Opus 4.6 Thinking",
+        "gemini-3.5-flash-low": "Gemini 3.5 Flash Low",
+        "custom": "Enter a custom Antigravity model slug",
+    },
+    "composer": {
+        "grok-composer-2.5-fast": "Grok Composer 2.5 Fast",
+        "custom": "Enter a custom Composer model slug",
+    },
+    "openai": {
+        "gpt-5.5": "GPT-5.5",
+        "gpt-5.2": "GPT-5.2",
+        "custom": "Enter a custom OpenAI model slug",
+    },
+    "anthropic": {
+        "claude-opus-4.6": "Claude Opus 4.6",
+        "custom": "Enter a custom Anthropic model slug",
+    },
+    "gemini": {
+        "gemini-3-pro": "Gemini 3 Pro",
+        "custom": "Enter a custom Gemini model slug",
+    },
+    "azure-foundry": {
+        "gpt-5.5": "GPT-5.5 deployment",
+        "gpt-5.4": "GPT-5.4 deployment",
+        "custom": "Enter your Azure deployment name",
+    },
+    "ollama": {
+        "qwen3-coder": "qwen3-coder",
+        "custom": "Enter a custom Ollama model name",
+    },
+    "openai-compatible": {
+        "custom": "Enter a custom model name",
+    },
+}
+
+
 def _agent_with_model_and_policy(
     agent: AgentInstance,
     *,
     model_ref: str,
     quota_policy: QuotaPolicy,
+    auth_ref: str | None = None,
+    setup_name: str | None = None,
 ) -> AgentInstance:
-    updated = reset_agent_for_launch(agent, model_ref=model_ref)
+    updated = reset_agent_for_launch(
+        agent,
+        model_ref=model_ref,
+        auth_ref=auth_ref,
+        setup_name=setup_name,
+    )
     return AgentInstance(
         agent_id=updated.agent_id,
         role=updated.role,
         model_profile=updated.model_profile,
         executor_adapter=updated.executor_adapter,
+        setup_name=updated.setup_name,
         state=updated.state,
         quota_policy=quota_policy,
         active_task=updated.active_task,
@@ -492,9 +759,10 @@ def _build_launch_profile(
     profile: SessionProfile, *, name: str | None, preset_name: str | None = None
 ) -> SessionProfile:
     profile_name = name or _prompt(profile.name, "Session profile")
+    setups = load_launch_setups()
     if preset_name is None:
         preset_name = _prompt_choice(
-            "default-dev-shop",
+            "guided",
             "Launch preset",
             {key: value["description"] for key, value in LAUNCH_PRESETS.items()},
         )
@@ -502,24 +770,83 @@ def _build_launch_profile(
         raise LfgError(f"Expected one of: {', '.join(LAUNCH_PRESETS)}")
     preset = LAUNCH_PRESETS[preset_name]
     advanced = preset_name == "advanced"
+    guided = preset_name != "advanced"
 
     orchestrator_ref = (
         preset["orchestrator"] or profile.orchestrator.model_profile.model_ref
     )
     architect_ref = preset["architect"] or profile.architect.model_profile.model_ref
     worker_refs = [_default_worker_ref(worker) for worker in profile.workers]
+    orchestrator_auth_ref = profile.orchestrator.model_profile.auth_ref
+    architect_auth_ref = profile.architect.model_profile.auth_ref
+    worker_auth_refs = [worker.model_profile.auth_ref for worker in profile.workers]
+    orchestrator_setup_name = profile.orchestrator.setup_name
+    architect_setup_name = profile.architect.setup_name
+    worker_setup_names = [worker.setup_name for worker in profile.workers]
     reviewer_ref = (
         preset["reviewer"] or profile.reviewer.model_profile.model_ref
         if profile.reviewer is not None
         else None
     )
+    reviewer_auth_ref = (
+        profile.reviewer.model_profile.auth_ref if profile.reviewer is not None else None
+    )
+    reviewer_setup_name = profile.reviewer.setup_name if profile.reviewer else None
     validator_ref = (
         profile.validator.model_profile.model_ref
         if profile.validator is not None
         else None
     )
+    validator_auth_ref = (
+        profile.validator.model_profile.auth_ref
+        if profile.validator is not None
+        else None
+    )
+    validator_setup_name = profile.validator.setup_name if profile.validator else None
 
-    if advanced:
+    if guided:
+        (
+            orchestrator_ref,
+            orchestrator_auth_ref,
+            orchestrator_setup_name,
+        ) = _select_setup_for_agent(
+            profile.orchestrator,
+            default_model_ref=orchestrator_ref,
+            setups=setups,
+        )
+        architect_ref, architect_auth_ref, architect_setup_name = _select_setup_for_agent(
+            profile.architect,
+            default_model_ref=architect_ref,
+            setups=setups,
+        )
+        selected_workers = [
+            _select_setup_for_agent(
+                worker,
+                default_model_ref=worker_refs[index],
+                setups=setups,
+            )
+            for index, worker in enumerate(profile.workers)
+        ]
+        worker_refs = [item[0] for item in selected_workers]
+        worker_auth_refs = [item[1] for item in selected_workers]
+        worker_setup_names = [item[2] for item in selected_workers]
+        if profile.reviewer is not None and reviewer_ref is not None:
+            reviewer_ref, reviewer_auth_ref, reviewer_setup_name = _select_setup_for_agent(
+                profile.reviewer,
+                default_model_ref=reviewer_ref,
+                setups=setups,
+            )
+        if profile.validator is not None and validator_ref is not None:
+            (
+                validator_ref,
+                validator_auth_ref,
+                validator_setup_name,
+            ) = _select_setup_for_agent(
+                profile.validator,
+                default_model_ref=validator_ref,
+                setups=setups,
+            )
+    elif advanced:
         orchestrator_ref = _prompt(orchestrator_ref, "Hermes orchestrator model ref")
         architect_ref = _prompt(architect_ref, "Architect model ref")
         worker_refs = [
@@ -575,6 +902,8 @@ def _build_launch_profile(
             worker,
             model_ref=worker_refs[index],
             quota_policy=quota_policy,
+            auth_ref=worker_auth_refs[index],
+            setup_name=worker_setup_names[index],
         )
         for index, worker in enumerate(profile.workers)
     )
@@ -587,17 +916,23 @@ def _build_launch_profile(
             profile.orchestrator,
             model_ref=orchestrator_ref,
             quota_policy=quota_policy,
+            auth_ref=orchestrator_auth_ref,
+            setup_name=orchestrator_setup_name,
         ),
         architect=_agent_with_model_and_policy(
             profile.architect,
             model_ref=architect_ref,
             quota_policy=quota_policy,
+            auth_ref=architect_auth_ref,
+            setup_name=architect_setup_name,
         ),
         workers=workers,
         reviewer=_agent_with_model_and_policy(
             profile.reviewer,
             model_ref=reviewer_ref,
             quota_policy=quota_policy,
+            auth_ref=reviewer_auth_ref,
+            setup_name=reviewer_setup_name,
         )
         if profile.reviewer is not None and reviewer_ref is not None
         else None,
@@ -605,6 +940,8 @@ def _build_launch_profile(
             profile.validator,
             model_ref=validator_ref,
             quota_policy=quota_policy,
+            auth_ref=validator_auth_ref,
+            setup_name=validator_setup_name,
         )
         if profile.validator is not None and validator_ref is not None
         else None,

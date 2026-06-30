@@ -36,7 +36,7 @@ def test_antigravity_command_does_not_probe_doctor(monkeypatch) -> None:
         raise AssertionError("doctor() should not be called during command creation")
 
     monkeypatch.setattr(planner, "doctor", fail_doctor)
-    monkeypatch.setattr(shutil, "which", lambda name: "/usr/local/bin/agy")
+    monkeypatch.setattr(shutil, "which", lambda _name: "/usr/local/bin/agy")
 
     command = planner.command(
         repository=Path("/tmp/repo"),

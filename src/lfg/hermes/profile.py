@@ -8,6 +8,7 @@ from pathlib import Path
 import yaml
 
 from lfg.config.models import ProjectConfig
+from lfg.runtime.launch_setups import load_setup_env, write_runtime_env
 from lfg.runtime.secrets import ensure_runtime_secrets_file
 from lfg.runtime.session import SessionProfile
 from lfg.util.atomic import atomic_write_text
@@ -56,6 +57,7 @@ def generate_hermes_profile(
     config_path = home / "config.yaml"
     mcp_config_path = home / "mcp.json"
     env_path = ensure_runtime_secrets_file(home)
+    runtime_env = write_runtime_env(env_path, _session_setup_names(session))
     _inherit_existing_auth(home)
     skill_dirs = [
         str(config.repository_root / ".lfg" / "skills"),
@@ -91,7 +93,7 @@ def generate_hermes_profile(
             "default": session.orchestrator.model_profile.model,
             "name": session.orchestrator.model_profile.model,
             "reasoning_effort": session.orchestrator.model_profile.reasoning_effort,
-            "base_url": session.orchestrator.model_profile.base_url,
+            "base_url": _orchestrator_base_url(session, runtime_env),
         },
         "providers": {},
         "toolsets": ["hermes-cli"],
@@ -210,3 +212,32 @@ description: Use LFG MCP tools to run this repository as a durable agentic devel
 
 {instructions}
 """
+
+
+def _session_setup_names(session: SessionProfile) -> list[str]:
+    names = [agent.setup_name for agent in session.agents if agent.setup_name]
+    return [name for name in names if name]
+
+
+def _orchestrator_base_url(
+    session: SessionProfile, runtime_env: dict[str, str]
+) -> str | None:
+    base_url = session.orchestrator.model_profile.base_url
+    if base_url:
+        return base_url
+    setup_name = session.orchestrator.setup_name
+    if setup_name:
+        setup_env = load_setup_env(setup_name)
+        for key in (
+            "AZURE_OPENAI_ENDPOINT",
+            "AZURE_AI_FOUNDRY_ENDPOINT",
+            "OPENAI_BASE_URL",
+        ):
+            value = setup_env.get(key)
+            if value:
+                return value
+    for key in ("AZURE_OPENAI_ENDPOINT", "AZURE_AI_FOUNDRY_ENDPOINT", "OPENAI_BASE_URL"):
+        value = runtime_env.get(key)
+        if value:
+            return value
+    return None

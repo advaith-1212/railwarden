@@ -12,6 +12,7 @@ from urllib.request import Request, urlopen
 from lfg.config.models import ProjectConfig
 from lfg.hermes.profile import generate_hermes_profile, hermes_executable
 from lfg.providers.adapters import ProviderAdapter
+from lfg.runtime.launch_setups import load_setup_env
 from lfg.runtime.session import AgentInstance, SessionProfile, load_session_profile
 from lfg.runtime.typed_agents import pydanticai_available
 from lfg.runtime.workflow import langgraph_available
@@ -98,11 +99,14 @@ def _credential_status(agents: tuple[AgentInstance, ...]) -> list[dict[str, obje
             continue
         if auth_ref.startswith("env:"):
             name = auth_ref.removeprefix("env:")
+            setup_env = load_setup_env(agent.setup_name) if agent.setup_name else {}
             rows.append(
                 {
                     "agent_id": agent.agent_id,
                     "provider": agent.model_profile.provider,
-                    "status": "available" if bool(os.environ.get(name)) else "missing",
+                    "status": "available"
+                    if bool(os.environ.get(name) or setup_env.get(name))
+                    else "missing",
                     "auth_ref": auth_ref,
                 }
             )
@@ -135,6 +139,16 @@ def _endpoint_status(agents: tuple[AgentInstance, ...]) -> list[dict[str, object
         elif provider == "azure-foundry":
             endpoint = (
                 agent.model_profile.base_url
+                or (
+                    load_setup_env(agent.setup_name).get("AZURE_OPENAI_ENDPOINT")
+                    if agent.setup_name
+                    else None
+                )
+                or (
+                    load_setup_env(agent.setup_name).get("AZURE_AI_FOUNDRY_ENDPOINT")
+                    if agent.setup_name
+                    else None
+                )
                 or os.environ.get("AZURE_OPENAI_ENDPOINT")
                 or os.environ.get("AZURE_AI_FOUNDRY_ENDPOINT")
             )

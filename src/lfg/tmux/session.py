@@ -49,13 +49,14 @@ def launch_layout(
 ) -> list[PaneSpec]:
     root = shlex.quote(str(config.repository_root))
     log_dir = shlex.quote(str(config.runtime_directory / "logs"))
+    source_env = _source_env_command(hermes_profile.env_path)
     hermes_command = " ".join(shlex.quote(item) for item in hermes_profile.command)
     observability_loop = _portable_status_loop("lfg observability")
     specs = [
         PaneSpec(
             "controller",
             "Controller | role=factory exec=lfg provider=local model=deterministic | healthy",
-            f"cd {root} && mkdir -p {log_dir} && PYTHONUNBUFFERED=1 lfg controller 2>&1 | tee -a {shlex.quote(str(config.runtime_directory / 'logs' / 'controller.log'))}",
+            f"{source_env} && cd {root} && mkdir -p {log_dir} && PYTHONUNBUFFERED=1 lfg controller 2>&1 | tee -a {shlex.quote(str(config.runtime_directory / 'logs' / 'controller.log'))}",
             "factory",
         ),
         PaneSpec(
@@ -63,19 +64,19 @@ def launch_layout(
             _pane_title(
                 profile.orchestrator, label="Hermes", budget=profile.budget_label
             ),
-            f"cd {root} && {hermes_command}",
+            f"{source_env} && cd {root} && {hermes_command}",
             "factory",
         ),
         PaneSpec(
             "integration",
             "Integration | role=integrator exec=lfg provider=git model=deterministic | healthy",
-            f"cd {root} && {observability_loop}",
+            f"{source_env} && cd {root} && {observability_loop}",
             "factory",
         ),
         PaneSpec(
             "observability",
             "Observability | role=monitor exec=lfg provider=langgraph model=state | healthy",
-            f"cd {root} && {observability_loop}",
+            f"{source_env} && cd {root} && {observability_loop}",
             "observability",
         ),
     ]
@@ -85,7 +86,7 @@ def launch_layout(
                 agent.agent_id,
                 _pane_title(agent, label=agent.agent_id, budget=profile.budget_label),
                 (
-                    f"cd {root} && printf %s\\\\n "
+                    f"{source_env} && cd {root} && printf %s\\\\n "
                     f"{shlex.quote(f'LFG worker pane ready: {agent.agent_id} ({agent.executor_adapter})')} "
                     "&& exec ${SHELL:-/bin/sh}"
                 ),
@@ -350,6 +351,11 @@ def _portable_status_loop(command: str) -> str:
         f"while true; do clear; date; sh -c {quoted}; sleep 5; done; "
         "fi"
     )
+
+
+def _source_env_command(path: object) -> str:
+    quoted = shlex.quote(str(path))
+    return f"set -a; if [ -f {quoted} ]; then . {quoted}; fi; set +a"
 
 
 def stop_session(config: ProjectConfig) -> bool:
