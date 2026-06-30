@@ -26,6 +26,7 @@ from lfg.runtime.session import (
     AgentInstance,
     load_session_profile,
     model_profile_from_ref,
+    reset_agent_for_launch,
     save_session_profile,
     update_agent,
 )
@@ -143,6 +144,25 @@ def test_default_session_profile_uses_valid_cli_model_refs(git_repo: Path) -> No
     )
     assert antigravity.model_profile.model_ref == "antigravity:gemini-3.5-flash-low"
     assert composer.model_profile.model_ref == "composer:grok-composer-2.5-fast"
+
+
+def test_reset_agent_for_launch_clears_stale_state() -> None:
+    agent = AgentInstance(
+        agent_id="antigravity-1",
+        role="coder",
+        model_profile=model_profile_from_ref("antigravity:gemini-3.5-flash-low"),
+        executor_adapter="antigravity",
+        state="paused",
+        active_task="task-WP-1",
+    )
+
+    updated = reset_agent_for_launch(
+        agent, model_ref="azure-foundry:deployment-a"
+    )
+
+    assert updated.state == "ready"
+    assert updated.active_task is None
+    assert updated.model_profile.model_ref == "azure-foundry:deployment-a"
 
 
 def test_update_command_pulls_and_reinstalls_editable_checkout(

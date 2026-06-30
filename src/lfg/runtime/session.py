@@ -183,6 +183,18 @@ def default_session_profile(
     )
 
 
+def reset_agent_for_launch(agent: AgentInstance, *, model_ref: str) -> AgentInstance:
+    return AgentInstance(
+        agent_id=agent.agent_id,
+        role=agent.role,
+        model_profile=model_profile_from_ref(model_ref),
+        executor_adapter=agent.executor_adapter,
+        state="ready",
+        quota_policy=agent.quota_policy,
+        active_task=None,
+    )
+
+
 def _default_provider_model(provider: str) -> str:
     defaults = {
         "codex": "gpt-5.5?reasoning=high",

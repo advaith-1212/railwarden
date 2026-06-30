@@ -18,6 +18,7 @@ from lfg.providers.health import (
     record_failure,
     record_success,
     refresh_state,
+    save_state,
 )
 from lfg.provisioning.worktrees import ensure_worktree
 from lfg.runtime.checkpoints import CheckpointResult, create_checkpoint_commit
@@ -749,11 +750,10 @@ def controller_tick(
         append_event(config.runtime_directory, "controller_waiting_for_plan_approval")
         return {"status": "waiting_for_plan_approval", "launched": []}
     adapters = adapters or default_adapters()
+    _refresh_provider_health(files, adapters)
     for provider in config.worker_providers:
         state = refresh_state(load_state(config.runtime_directory, provider))
         if state.status == "probe":
-            from lfg.providers.health import save_state
-
             save_state(config.runtime_directory, state)
     hydrate_task_state(files)
     reconcile_processes(files)
@@ -858,6 +858,39 @@ def controller_tick(
         advance_workflow(config.runtime_directory, "WORK_EXECUTING")
         slots -= 1
     return {"status": "ok", "launched": launched, "integrated": integrated}
+
+
+def _refresh_provider_health(
+    files: ProjectFiles, adapters: dict[str, ProviderAdapter]
+) -> None:
+    config = files.project
+    for provider in config.worker_providers:
+        adapter = adapters.get(provider)
+        if adapter is None:
+            continue
+        health = adapter.health_check()
+        state = load_state(config.runtime_directory, provider)
+        status = str(health.get("status", "unavailable"))
+        if status == "healthy":
+            if state.status != "healthy":
+                record_success(config.runtime_directory, provider)
+            agent = _agent_for_provider(files, provider)
+            if (
+                agent is not None
+                and agent.state in {"unavailable", "rate_limited"}
+                and agent.active_task is None
+            ):
+                _set_agent_runtime_state(config, agent, state="ready", active_task=None)
+            continue
+        if status == "unavailable":
+            state.status = "unavailable"
+            state.last_error = str(health.get("reason", "provider unavailable"))
+            save_state(config.runtime_directory, state)
+            agent = _agent_for_provider(files, provider)
+            if agent is not None and agent.active_task is None:
+                _set_agent_runtime_state(
+                    config, agent, state="unavailable", active_task=None
+                )
 
 
 def integration_candidates(files: ProjectFiles) -> list[dict[str, Any]]:

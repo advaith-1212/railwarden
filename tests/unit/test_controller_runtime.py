@@ -10,6 +10,7 @@ from lfg.config.init import initialize_project
 from lfg.config.loader import load_project_files
 from lfg.engine.controller import controller_tick
 from lfg.engine.dashboard import render_dashboard
+from lfg.providers.adapters import ProviderAdapter
 from lfg.providers.health import classify_failure
 from lfg.runtime.tasks import load_tasks, save_tasks
 
@@ -219,6 +220,46 @@ def test_result_path_sandbox_failure_is_not_auth() -> None:
     assert transient is False
     assert requires_human is False
     assert pattern == "result json sandbox"
+
+
+def test_controller_recovers_from_stale_provider_auth_state(git_repo: Path) -> None:
+    initialize_project(git_repo, yes=True)
+    project_path = git_repo / ".lfg" / "project.yaml"
+    project = yaml.safe_load(project_path.read_text(encoding="utf-8"))
+    project["project"]["integration_branch"] = "main"
+    project["workers"]["providers"] = ["codex", "composer"]
+    project["providers"]["codex"]["priority"] = 10
+    project["providers"]["composer"]["priority"] = 30
+    project_path.write_text(yaml.safe_dump(project), encoding="utf-8")
+    _write_package(git_repo)
+    _approve(git_repo)
+    files = load_project_files(git_repo)
+    provider_path = files.project.runtime_directory / "provider-health" / "codex.json"
+    provider_path.parent.mkdir(parents=True, exist_ok=True)
+    provider_path.write_text(
+        json.dumps(
+            {
+                "name": "codex",
+                "status": "needs_auth",
+                "failure_kind": "authentication",
+                "failure_count": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class HealthyAdapter(ProviderAdapter):
+        def health_check(self) -> dict[str, object]:
+            return {"name": self.name, "status": "healthy", "model": self.model}
+
+    adapters = {
+        "codex": HealthyAdapter("codex", "codex", "gpt-5.5", "high"),
+        "composer": HealthyAdapter("composer", "grok", "grok-composer-2.5-fast"),
+    }
+
+    result = controller_tick(files, adapters=adapters, launch=False)
+
+    assert result["launched"] == [{"task_id": "task-WP-1", "provider": "codex"}]
 
 
 def test_dead_quota_process_creates_handoff_and_reassigns(git_repo: Path) -> None:

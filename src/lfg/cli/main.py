@@ -51,6 +51,7 @@ from lfg.runtime.session import (
     SessionProfile,
     load_session_profile,
     model_profile_from_ref,
+    reset_agent_for_launch,
     save_session_profile,
     update_agent,
 )
@@ -436,20 +437,20 @@ def _tool_note(row: dict[str, Any]) -> str:
 
 LAUNCH_PRESETS: dict[str, dict[str, str]] = {
     "default-dev-shop": {
-        "description": "Hermes on Codex, Antigravity architect, Codex/Antigravity/Composer workers.",
-        "orchestrator": "codex:gpt-5.5?reasoning=high",
+        "description": "Keep the current Hermes orchestrator profile, use Antigravity for planning, and Codex/Antigravity/Composer workers.",
+        "orchestrator": "",
         "architect": "antigravity:claude-opus-4.6-thinking",
-        "reviewer": "codex:gpt-5.5?reasoning=high",
+        "reviewer": "",
     },
     "codex-antigravity": {
-        "description": "Codex for Hermes and coding, Antigravity for planning.",
-        "orchestrator": "codex:gpt-5.5?reasoning=high",
+        "description": "Keep the current Hermes orchestrator, use Codex for coding, and Antigravity for planning.",
+        "orchestrator": "",
         "architect": "antigravity:claude-opus-4.6-thinking",
-        "reviewer": "codex:gpt-5.5?reasoning=high",
+        "reviewer": "",
     },
     "local-only": {
-        "description": "Prefer local Ollama for API-backed review/repair roles.",
-        "orchestrator": "codex:gpt-5.5?reasoning=high",
+        "description": "Keep the current Hermes orchestrator and prefer local Ollama for API-backed review/repair roles.",
+        "orchestrator": "",
         "architect": "antigravity:claude-opus-4.6-thinking",
         "reviewer": "ollama:qwen3-coder@http://localhost:11434",
     },
@@ -475,14 +476,15 @@ def _agent_with_model_and_policy(
     model_ref: str,
     quota_policy: QuotaPolicy,
 ) -> AgentInstance:
+    updated = reset_agent_for_launch(agent, model_ref=model_ref)
     return AgentInstance(
-        agent_id=agent.agent_id,
-        role=agent.role,
-        model_profile=model_profile_from_ref(model_ref),
-        executor_adapter=agent.executor_adapter,
-        state=agent.state,
+        agent_id=updated.agent_id,
+        role=updated.role,
+        model_profile=updated.model_profile,
+        executor_adapter=updated.executor_adapter,
+        state=updated.state,
         quota_policy=quota_policy,
-        active_task=agent.active_task,
+        active_task=updated.active_task,
     )
 
 
