@@ -91,9 +91,6 @@ class AntigravityClaudePlanner:
         )
 
     def command(self, *, repository: Path, prompt: str) -> list[str]:
-        status = self.doctor()
-        if status.remaining_limitation is not None:
-            raise RuntimeError(status.remaining_limitation)
         path = shutil.which("agy")
         if path is None:
             raise RuntimeError("Antigravity CLI `agy` is not installed")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from lfg.config.init import initialize_project
@@ -26,3 +27,21 @@ def test_provider_model_assignments() -> None:
 def test_antigravity_planner_command_shape() -> None:
     planner = AntigravityClaudePlanner()
     assert planner.model == "Claude Opus 4.6 (Thinking)"
+
+
+def test_antigravity_command_does_not_probe_doctor(monkeypatch) -> None:
+    planner = AntigravityClaudePlanner()
+
+    def fail_doctor() -> object:
+        raise AssertionError("doctor() should not be called during command creation")
+
+    monkeypatch.setattr(planner, "doctor", fail_doctor)
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/local/bin/agy")
+
+    command = planner.command(
+        repository=Path("/tmp/repo"),
+        prompt="plan the work",
+    )
+
+    assert command[:2] == ["/usr/local/bin/agy", "--model"]
+    assert "--print" in command
