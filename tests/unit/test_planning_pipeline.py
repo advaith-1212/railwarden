@@ -12,6 +12,7 @@ from lfg.planning.pipeline import (
     parse_planner_output,
 )
 from lfg.runtime.tasks import load_tasks
+from lfg.validation.package import commands_for_package
 
 PLANNER_OUTPUT = """
 {
@@ -141,7 +142,7 @@ def test_approve_pending_plan_writes_v2_orchestration_artifacts(
     assert "WP-9" in (git_repo / ".lfg" / "dependency_graph.mmd").read_text(
         encoding="utf-8"
     )
-    assert "src/lfg/runtime/" in (git_repo / ".lfg" / "ownership_matrix.csv").read_text(
+    assert "src/lfg/runtime" in (git_repo / ".lfg" / "ownership_matrix.csv").read_text(
         encoding="utf-8"
     )
     assert (git_repo / ".lfg" / "agent_prompts" / "wp-9.md").exists()
@@ -198,3 +199,54 @@ work_packages:
 
     assert payload.plan_markdown.startswith("# YAML Plan")
     assert payload.work_packages[0]["id"] == "WP-1"
+
+
+def test_approve_pending_plan_normalizes_repo_paths(git_repo: Path) -> None:
+    initialize_project(git_repo, yes=True)
+    (git_repo / "index.html").write_text("<!doctype html>\n", encoding="utf-8")
+    (git_repo / "styles.css").write_text("body {}\n", encoding="utf-8")
+    (git_repo / "src").mkdir(exist_ok=True)
+    (git_repo / "src" / "app.js").write_text("console.log('ok')\n", encoding="utf-8")
+    files = load_project_files(git_repo)
+    output = """
+{
+  "plan_markdown": "# Plan\\n\\nDo the work.",
+  "work_packages": [
+    {
+      "id": "WP-2",
+      "name": "UI and state",
+      "objective": "Update clock and reminders",
+      "owned_paths": ["index.html", "style.css", "app.js"],
+      "forbidden_paths": ["./style.css"],
+      "acceptance_tests": []
+    }
+  ]
+}
+"""
+    create_pending_plan(files.project, "extend calendar", planner_output_text=output)
+
+    approved = approve_latest_plan(files.project)
+    package = approved["work_packages"][0]
+
+    assert package["owned_paths"] == ["index.html", "styles.css", "src/app.js"]
+    assert package["forbidden_paths"] == ["styles.css"]
+
+
+def test_commands_for_package_ignores_prose_acceptance_tests() -> None:
+    from lfg.config.models import WorkPackage
+
+    prose = WorkPackage(
+        package_id="WP-2",
+        name="Clock",
+        objective="",
+        owned_paths=("index.html",),
+        acceptance_tests=(
+            "Clock element is visible in the topbar on page load",
+            "node --check src/app.js",
+        ),
+    )
+
+    commands = commands_for_package(prose)
+
+    assert [command.name for command in commands] == ["WP-2-acceptance-2"]
+    assert commands[0].argv == ("node", "--check", "src/app.js")

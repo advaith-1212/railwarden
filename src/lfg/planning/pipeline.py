@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import os
 import subprocess
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import yaml
@@ -402,6 +404,7 @@ def approve_latest_plan(config: ProjectConfig) -> dict[str, Any]:
     packages = payload.get("work_packages")
     if not isinstance(packages, list):
         raise LfgError("Pending plan has no work packages")
+    normalized_packages = _normalize_packages_for_repo(config.repository_root, packages)
     config_dir = config.repository_root / ".lfg"
     atomic_write_text(
         config_dir / "plan.md",
@@ -412,12 +415,13 @@ def approve_latest_plan(config: ProjectConfig) -> dict[str, Any]:
     atomic_write_text(
         config_dir / "work_packages.yaml",
         yaml.safe_dump(
-            {"schema_version": "2.0.0", "work_packages": packages},
+            {"schema_version": "2.0.0", "work_packages": normalized_packages},
             sort_keys=False,
         ),
     )
-    _write_orchestration_artifacts(config, payload, packages)
-    for package in packages:
+    payload["work_packages"] = normalized_packages
+    _write_orchestration_artifacts(config, payload, normalized_packages)
+    for package in normalized_packages:
         if isinstance(package, dict):
             ensure_task(
                 config.runtime_directory,
@@ -439,6 +443,70 @@ def approve_latest_plan(config: ProjectConfig) -> dict[str, Any]:
         payload={"run_id": payload["run_id"]},
     )
     return payload
+
+
+def _normalize_packages_for_repo(
+    repository_root: Path, packages: list[Any]
+) -> list[dict[str, Any]]:
+    candidates = _repo_path_candidates(repository_root)
+    normalized: list[dict[str, Any]] = []
+    for package in packages:
+        if not isinstance(package, dict):
+            continue
+        updated = dict(package)
+        updated["owned_paths"] = _normalize_path_list(
+            package.get("owned_paths", []), candidates
+        )
+        updated["forbidden_paths"] = _normalize_path_list(
+            package.get("forbidden_paths", []), candidates
+        )
+        normalized.append(updated)
+    return normalized
+
+
+def _repo_path_candidates(repository_root: Path) -> list[str]:
+    paths: set[str] = set()
+    for path in repository_root.rglob("*"):
+        if ".git" in path.parts or ".lfg-runtime" in path.parts:
+            continue
+        relative = path.relative_to(repository_root).as_posix().rstrip("/")
+        if relative:
+            paths.add(relative)
+    return sorted(paths)
+
+
+def _normalize_path_list(values: Any, candidates: list[str]) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    return [_normalize_repo_path(str(value), candidates) for value in values]
+
+
+def _normalize_repo_path(value: str, candidates: list[str]) -> str:
+    normalized = value.strip().replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    normalized = normalized.rstrip("/")
+    if not normalized:
+        return normalized
+    if normalized in candidates:
+        return normalized
+
+    basename = Path(normalized).name
+    basename_matches = [item for item in candidates if Path(item).name == basename]
+    if len(basename_matches) == 1:
+        return basename_matches[0]
+
+    close = difflib.get_close_matches(
+        basename,
+        [Path(item).name for item in candidates],
+        n=2,
+        cutoff=0.75,
+    )
+    if len(close) == 1:
+        matched = [item for item in candidates if Path(item).name == close[0]]
+        if len(matched) == 1:
+            return matched[0]
+    return normalized
 
 
 def _write_orchestration_artifacts(
