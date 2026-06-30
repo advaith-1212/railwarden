@@ -16,6 +16,14 @@ from lfg.engine.controller import controller_tick
 from lfg.engine.dashboard import render_dashboard
 from lfg.errors import LfgError
 from lfg.git import changed_files_in_commit, discover_repo, head
+from lfg.hermes.kanban import (
+    HermesAdapter,
+    apply_bootstrap,
+    apply_import_plan,
+    bootstrap_plan,
+    build_import_plan,
+    hermes_status,
+)
 from lfg.hermes.mailbox import (
     append_message,
     messages_for,
@@ -293,7 +301,7 @@ def _print_doctor(payload: dict[str, Any]) -> None:
     if isinstance(tools, dict):
         _section("Tools")
         _table(
-            ["Tool", "Status", "Path/Detail"],
+            ["Tool", "Status", "Path/Detail", "Version/Note"],
             [
                 [
                     name,
@@ -301,6 +309,7 @@ def _print_doctor(payload: dict[str, Any]) -> None:
                     _mapping_or_empty(row).get("path")
                     or _mapping_or_empty(row).get("available")
                     or "-",
+                    _tool_note(_mapping_or_empty(row)),
                 ]
                 for name, row in tools.items()
             ],
@@ -414,6 +423,15 @@ def _list_of_dicts(value: object) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, dict)]
+
+
+def _tool_note(row: dict[str, Any]) -> str:
+    if row.get("update_available"):
+        return "update available"
+    version = row.get("version")
+    if version:
+        return str(version).splitlines()[0]
+    return "-"
 
 
 LAUNCH_PRESETS: dict[str, dict[str, str]] = {
@@ -1327,7 +1345,123 @@ def cmd_worker(args: argparse.Namespace) -> int:
         return 0
 
 
-def cmd_hermes(_args: argparse.Namespace) -> int:
+def _print_hermes_status(payload: dict[str, object]) -> None:
+    _section("Hermes Kanban companion")
+    print(f"Current board: {payload.get('current_board')}")
+    print(f"Project slug: {payload.get('project_slug')}")
+    print(
+        "Update available: "
+        + ("yes" if payload.get("update_available") else "no or unknown")
+    )
+    print()
+    for key, title in (
+        ("version", "Hermes version"),
+        ("gateway", "Gateway"),
+        ("boards", "Boards"),
+        ("projects", "Projects"),
+        ("profiles", "Profiles"),
+        ("diagnostics", "Kanban diagnostics"),
+    ):
+        _section(title)
+        text = str(payload.get(key, "")).strip() or "none"
+        for line in text.splitlines():
+            print(line)
+        print()
+
+
+def cmd_hermes_status(args: argparse.Namespace) -> int:
+    _, files = configured_project(Path.cwd())
+    payload = hermes_status(files.project, HermesAdapter())
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    else:
+        _print_hermes_status(payload)
+    return 0
+
+
+def cmd_hermes_bootstrap(args: argparse.Namespace) -> int:
+    _, files = configured_project(Path.cwd())
+    plan = bootstrap_plan(files.project)
+    if args.dry_run:
+        result_plan = plan
+    else:
+        result_plan = apply_bootstrap(files.project, HermesAdapter())
+    payload = result_plan.to_dict()
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+        return 0
+    _section("Hermes bootstrap")
+    print(f"Board: {result_plan.board}")
+    print(f"Project: {result_plan.project_slug}")
+    print(f"Repository: {result_plan.repository}")
+    print()
+    _section("Actions")
+    for action in result_plan.actions:
+        print(f"- {action}")
+    external = result_plan.external_lanes
+    if external:
+        print()
+        _section("External lane note")
+        print(
+            "These assignees are not valid Hermes profile names and require "
+            "explicit external lane/plugin support:"
+        )
+        for lane in external:
+            print(f"- {lane}")
+    return 0
+
+
+def cmd_hermes_import(args: argparse.Namespace) -> int:
+    _, files = configured_project(Path.cwd())
+    plan = build_import_plan(files)
+    if not args.apply:
+        payload = plan.to_dict()
+        if args.json:
+            print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+            return 0
+        _section("Hermes Kanban import dry-run")
+        print(f"Board: {plan.board}")
+        print(f"Project: {plan.project_slug}")
+        print()
+        _section("Tasks")
+        for task in plan.tasks:
+            print(
+                f"- {task.package_id}: {task.title} "
+                f"@{task.assignee or 'unassigned'} "
+                f"branch={task.branch} workspace={task.workspace}"
+            )
+        print()
+        _section("Links")
+        for link in plan.links:
+            print(f"- {link.parent_package_id} -> {link.child_package_id}")
+        if not plan.tasks:
+            print("No work packages found.")
+        return 0
+    payload = apply_import_plan(plan, HermesAdapter())
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    else:
+        _section("Hermes Kanban import applied")
+        _table(
+            ["Package", "Task"],
+            [
+                [row.get("package_id"), row.get("task_id")]
+                for row in _list_of_dicts(payload.get("created"))
+            ],
+        )
+        print()
+        _section("Links")
+        _table(
+            ["Parent", "Child"],
+            [
+                [row.get("parent"), row.get("child")]
+                for row in _list_of_dicts(payload.get("linked"))
+            ],
+        )
+    return 0
+
+
+def cmd_hermes_console(_args: argparse.Namespace) -> int:
     _, files = configured_project(Path.cwd())
     print("LFG Hermes console.")
     print(
@@ -1509,10 +1643,13 @@ def build_parser() -> argparse.ArgumentParser:
     events = sub.add_parser("events")
     events.add_argument("--limit", type=int, default=50)
     events.set_defaults(func=cmd_events)
-    start = sub.add_parser("start")
+    start = sub.add_parser("start", help="Legacy tmux session start.")
     start.add_argument("--no-attach", action="store_true")
     start.set_defaults(func=cmd_start)
-    launch = sub.add_parser("launch")
+    launch = sub.add_parser(
+        "launch",
+        help="Deprecated legacy tmux factory launch; prefer `lfg hermes bootstrap`.",
+    )
     launch.add_argument("--profile")
     launch.add_argument("--preset", choices=sorted(LAUNCH_PRESETS))
     launch.add_argument("--no-attach", action="store_true")
@@ -1525,7 +1662,10 @@ def build_parser() -> argparse.ArgumentParser:
     integrate = sub.add_parser("integrate")
     integrate.add_argument("--execute", action="store_true")
     integrate.set_defaults(func=cmd_integrate)
-    controller = sub.add_parser("controller")
+    controller = sub.add_parser(
+        "controller",
+        help="Deprecated legacy LFG scheduler; Hermes Kanban is the default.",
+    )
     controller.add_argument("--once", action="store_true")
     controller.add_argument("--no-launch", action="store_true")
     controller.add_argument("--no-integrate", action="store_true")
@@ -1598,7 +1738,23 @@ def build_parser() -> argparse.ArgumentParser:
     mcp = sub.add_parser("mcp")
     mcp.add_argument("mcp_command", choices=["serve"])
     mcp.set_defaults(func=cmd_mcp)
-    sub.add_parser("hermes").set_defaults(func=cmd_hermes)
+    hermes = sub.add_parser("hermes", help="Hermes Kanban companion commands.")
+    hermes.set_defaults(func=cmd_hermes_console)
+    hermes_sub = hermes.add_subparsers(dest="hermes_command")
+    hermes_status_parser = hermes_sub.add_parser("status")
+    hermes_status_parser.add_argument("--json", action="store_true")
+    hermes_status_parser.set_defaults(func=cmd_hermes_status)
+    hermes_bootstrap = hermes_sub.add_parser("bootstrap")
+    hermes_bootstrap.add_argument("--dry-run", action="store_true", default=False)
+    hermes_bootstrap.add_argument("--json", action="store_true")
+    hermes_bootstrap.set_defaults(func=cmd_hermes_bootstrap)
+    hermes_import = hermes_sub.add_parser("import")
+    import_mode = hermes_import.add_mutually_exclusive_group()
+    import_mode.add_argument("--dry-run", action="store_true")
+    import_mode.add_argument("--apply", action="store_true")
+    hermes_import.add_argument("--json", action="store_true")
+    hermes_import.set_defaults(func=cmd_hermes_import)
+    hermes_sub.add_parser("console").set_defaults(func=cmd_hermes_console)
     sub.add_parser("version").set_defaults(func=lambda _args: print(__version__) or 0)
     return parser
 

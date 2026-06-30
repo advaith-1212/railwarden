@@ -1,0 +1,14 @@
+schema_version: 1.0.0
+commands:
+- name: ruff
+  command:
+    cwd: .
+    argv:
+    - ruff
+    - check
+    - .
+- name: pytest
+  command:
+    cwd: .
+    argv:
+    - pytest

@@ -1,8 +1,13 @@
 # LFG
 
-LFG is a standalone, reusable agentic software-development orchestration system. It is installed as a global `lfg` CLI and operates on any Git repository through project-local `.lfg/` configuration and ignored `.lfg-runtime/` state.
+LFG is a Hermes Kanban companion for software-development work packages.
+Hermes Agent owns orchestration: goals, Kanban task lifecycle, dependencies,
+worker dispatch, worktrees, retries, dashboard state, logs, and run history.
+LFG owns project-local setup, `.lfg/` configuration, work-package import, and
+validation-policy rendering.
 
-LFG is not a TMOM feature and is not nested inside a product repository. TMOM's orchestration prototype was used only as source material for generic behaviors: deterministic DAG scheduling, safe worktree provisioning, lifecycle validation, serialized integration, provider health, process supervision, and tmux coordination.
+The old standalone factory runtime still exists for one transition release, but
+the default workflow is now Hermes-first.
 
 ## Install
 
@@ -18,72 +23,97 @@ To upgrade an editable install after pulling new commits:
 lfg update
 ```
 
-`lfg update` fast-forwards the LFG source checkout with `git pull --ff-only`
-and reinstalls the global CLI with `uv tool install --editable <checkout>
---force`.
-
 Prerequisites:
 
 - Python 3.12 and Git
-- tmux for the terminal workspace
-- Hermes Agent (`hermes`) for the orchestration console
-- Provider CLIs as needed: `codex`, `agy`, and `grok`
+- Hermes Agent (`hermes`)
+- A running Hermes gateway for Kanban dispatch:
 
-Run `lfg doctor` inside a configured project to see exactly what is installed,
-what is missing, whether Hermes can see the LFG MCP tools, and whether runtime
-state is ignored by git.
+```bash
+hermes gateway start
+```
 
-## Workflow
+Run `lfg doctor` inside a configured project to check local tools, Hermes
+version/update status, provider configuration, MCP, and ignored runtime state.
+
+## Hermes-First Workflow
 
 ```bash
 cd /path/to/project
 lfg setup --yes
 lfg doctor
-lfg launch
+lfg hermes status
+lfg hermes bootstrap --dry-run
+lfg hermes bootstrap
+lfg hermes import --dry-run
+lfg hermes import --apply
+hermes dashboard
 ```
 
-For an existing repository:
+`lfg hermes bootstrap` creates or verifies the configured Hermes Kanban board,
+binds a Hermes project to the repository, and checks the configured assignee
+profiles. `lfg hermes import` converts `.lfg/work_packages.yaml` into durable
+Hermes Kanban cards.
+
+Each work package becomes one Kanban task. Dependencies become Kanban links.
+Owned paths, forbidden paths, acceptance criteria, validation commands, commit
+expectations, and skills are rendered into the task body. Code tasks default to
+Hermes `worktree` workspaces and deterministic package branches.
+
+## Configuration
+
+Fresh projects include a Hermes section in `.lfg/project.yaml`:
+
+```yaml
+hermes:
+  board: lfg-my-repo
+  project_slug: my-repo
+  orchestrator_profile: null
+  default_assignee: default
+  profile_map: {}
+  workspace_mode: worktree
+```
+
+Use `profile_map` to route LFG provider names to Hermes profile/assignee names:
+
+```yaml
+hermes:
+  default_assignee: default
+  profile_map:
+    codex: backend
+    composer: frontend
+```
+
+Native Hermes profile lanes are the supported default. External CLI lanes such
+as Codex CLI, Antigravity, Composer, or Grok require explicit Hermes lane/plugin
+adapter work and should not be treated as paved by LFG import alone.
+
+## Migration Note
+
+Earlier LFG versions implemented their own scheduler, tmux factory layout,
+task JSON state, quota state, handoff packets, and serialized integration loop.
+Those paths are now legacy. New orchestration state should be created in Hermes
+Kanban. Existing `.lfg-runtime/` state may still be useful for diagnostics or
+manual migration, but Hermes Kanban is the source of truth going forward.
+
+Legacy commands such as `lfg launch`, `lfg controller`, `lfg dashboard`, and
+`lfg observability` remain available during the transition so existing projects
+do not break immediately.
+
+## Work Package Import
+
+Given `.lfg/work_packages.yaml`, inspect the planned Kanban cards:
 
 ```bash
-lfg adopt --dry-run /path/to/project
-lfg start
+lfg hermes import --dry-run --json
 ```
 
-`lfg launch` starts or attaches to the project tmux workspace. The default
-launch preset starts a `factory` window with Hermes, the LFG controller,
-workers, and integration status, plus an `observability` window for DAG,
-workflow, git, quota, event, and log state. LFG attaches to the `factory`
-window by default so Hermes is the first thing you see.
+Apply the import:
 
-Hermes is the coordination surface. Tell Hermes what to build in normal
-language. LFG exposes durable factory actions to Hermes through MCP tools such
-as `lfg.goal.submit`, `lfg.plan.show`, `lfg.contracts.freeze`,
-`lfg.task.inspect`, `lfg.validation.run`, `lfg.review.run`,
-`lfg.merge.approve`, `lfg.agent.swap`, and `lfg.checkpoint.create`.
+```bash
+lfg hermes import --apply
+```
 
-Use `lfg observe` or `lfg observability` for a readable terminal view of the
-DAG, workflow state, tmux panes, agents, and quotas.
-
-## Planning Approval
-
-The planner interface targets Claude Opus 4.6 Thinking through Antigravity (`agy`). `lfg run "<goal>"` stores the goal under `.lfg-runtime/runs/<run_id>/goal.md`, asks the planner for a human plan, derives machine-readable work packages when needed, writes the pending plan to runtime state, and waits. `lfg approve plan`, `lfg approve-contracts`, or Hermes `approved` writes `.lfg/plan.md`, freezes schema `2.0.0` work-package contracts, creates durable task state, and lets `lfg controller` schedule work.
-
-Approval also writes `.lfg/contract_freeze_manifest.yaml`, `.lfg/model_assignment.yaml`, `.lfg/dependency_graph.mmd`, `.lfg/ownership_matrix.csv`, and `.lfg/agent_prompts/<wp>.md`.
-
-LFG does not fake planner success. If `agy` is unavailable or the model is not listed locally, `lfg doctor` reports the exact blocker.
-
-## Execution
-
-The controller is deterministic: it releases DAG nodes after dependencies are merged, chooses healthy providers by preferred provider and configured priority, provisions one Git worktree per task, writes a prompt and expected result path, launches provider CLIs visibly in tmux worker panes when available, validates structured worker result JSON, runs LFG-owned package validation commands, records independent review evidence, records events in `.lfg-runtime/events.jsonl`, and integrates one reviewed branch at a time through validation and rollback.
-
-Use `lfg dashboard` for the terminal-native DAG, queue, provider health, recent event, and Git graph view. Use `lfg events` to inspect raw runtime events.
-
-## Recovery
-
-Runtime state is versioned and stored under `.lfg-runtime/`. Git remains the source of truth for code state. LFG stores supplemental state, logs, validation evidence, locks, handoff packets, and process identifiers under the runtime directory.
-
-Quota, rate-limit, capacity, and auth failures are classified from provider logs. Partial work is preserved by default; LFG writes `.lfg-runtime/handoffs/<task_id>-<attempt>.md` with the branch, worktree, log excerpt, status, diff summary, tests, and next instruction before assigning the next eligible provider or blocking for human action.
-
-## Limitations
-
-Provider adapters expose command construction, health checks, and failure classification only. Automated tests use fake/disposable repositories and do not make paid model calls. Hermes is implemented as an interactive control plane backed by file state; legacy `tmomcoord` behavior is documented as an adapter target.
+LFG uses stable idempotency keys in the form
+`lfg:<repo-name>:<package-id>` so repeated imports do not intentionally create
+duplicate Kanban tasks.

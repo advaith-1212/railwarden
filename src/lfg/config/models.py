@@ -63,6 +63,12 @@ class ProjectConfig:
     hermes_primary_model: str = "Claude Opus 4.6 (Thinking)"
     hermes_fallback_model: str | None = None
     hermes_allow_fallback: bool = False
+    hermes_board: str | None = None
+    hermes_project_slug: str | None = None
+    hermes_orchestrator_profile: str | None = None
+    hermes_default_assignee: str = "default"
+    hermes_profile_map: dict[str, str] = field(default_factory=dict)
+    hermes_workspace_mode: str = "worktree"
     execution_require_plan_approval: bool = True
     execution_preserve_partial_work_on_handoff: bool = True
     monitoring_git_graph: bool = True

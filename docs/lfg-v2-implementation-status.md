@@ -1,5 +1,12 @@
 # LFG v2 Implementation Status
 
+Pivot update: LFG is now moving to a Hermes Kanban companion model. Hermes
+Kanban is authoritative for new orchestration state, including task lifecycle,
+dependencies, dispatch, worktrees, retries, dashboard state, logs, and run
+history. The v2 scheduler/tmux/runtime implementation documented below remains
+as legacy transition behavior while `lfg hermes bootstrap` and
+`lfg hermes import` become the default path.
+
 Updated: 2026-06-28
 
 Baseline before implementation:

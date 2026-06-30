@@ -23,9 +23,10 @@ def doctor_report(
     adapters: dict[str, ProviderAdapter],
 ) -> dict[str, Any]:
     profile = load_session_profile(config)
+    hermes = hermes_executable()
     return {
         "tools": {
-            "hermes": _tool_status(hermes_executable()),
+            "hermes": _hermes_tool_status(hermes),
             "tmux": _tool_status(shutil.which("tmux")),
             "langgraph": {
                 "status": "healthy" if langgraph_available() else "missing",
@@ -57,6 +58,28 @@ def _tool_status(path: str | None) -> dict[str, object]:
     if path is None:
         return {"status": "missing", "path": None}
     return {"status": "healthy", "path": path}
+
+
+def _hermes_tool_status(path: str | None) -> dict[str, object]:
+    if path is None:
+        return {"status": "missing", "path": None}
+    payload: dict[str, object] = {"status": "healthy", "path": path}
+    try:
+        completed = subprocess.run(
+            [path, "--version"],
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        payload["version_status"] = "failed"
+        payload["version_error"] = str(exc)
+        return payload
+    output = f"{completed.stdout}\n{completed.stderr}".strip()
+    payload["version"] = _tail(output, limit=1000)
+    payload["update_available"] = "Update available" in output
+    return payload
 
 
 def _credential_status(agents: tuple[AgentInstance, ...]) -> list[dict[str, object]]:

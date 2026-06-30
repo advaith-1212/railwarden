@@ -44,6 +44,12 @@ def default_project_payload(repository_root: Path) -> dict[str, object]:
             "primary_model": "Claude Opus 4.6 (Thinking)",
             "fallback_model": None,
             "allow_fallback": False,
+            "board": f"lfg-{name}",
+            "project_slug": name.lower().replace("_", "-"),
+            "orchestrator_profile": None,
+            "default_assignee": "default",
+            "profile_map": {},
+            "workspace_mode": "worktree",
         },
         "providers": {
             "codex": {
@@ -148,7 +154,9 @@ def initialize_project(repository_root: Path, *, yes: bool) -> dict[str, str]:
 
 def ensure_integration_baseline(repository_root: Path, integration_branch: str) -> None:
     has_head = (
-        run_git(repository_root, "rev-parse", "--verify", "HEAD", check=False).returncode
+        run_git(
+            repository_root, "rev-parse", "--verify", "HEAD", check=False
+        ).returncode
         == 0
     )
     if not has_head:

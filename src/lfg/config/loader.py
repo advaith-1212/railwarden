@@ -33,6 +33,13 @@ def _path(root: Path, value: str | None, default: str) -> Path:
     return path if path.is_absolute() else root / path
 
 
+def _slug(value: str) -> str:
+    slug = "".join(char.lower() if char.isalnum() else "-" for char in value)
+    while "--" in slug:
+        slug = slug.replace("--", "-")
+    return slug.strip("-") or "project"
+
+
 def load_project_config(repository_root: Path) -> ProjectConfig:
     config_path = repository_root / ".lfg" / "factory.yaml"
     if not config_path.exists():
@@ -81,6 +88,12 @@ def load_project_config(repository_root: Path) -> ProjectConfig:
     name = str(project.get("name") or repository_root.name)
     default_model = str(planning.get("model", "Claude Opus 4.6 (Thinking)"))
     hermes_fallback = hermes.get("fallback_model")
+    profile_map_raw = hermes.get("profile_map", {})
+    if not isinstance(profile_map_raw, dict):
+        raise ConfigurationError("hermes.profile_map must be a mapping")
+    board = str(project.get("board", f"lfg-{name}"))
+    hermes_board = str(hermes.get("board", board))
+    hermes_project_slug = str(hermes.get("project_slug", _slug(name)))
     return ProjectConfig(
         name=name,
         repository_root=repository_root,
@@ -95,7 +108,7 @@ def load_project_config(repository_root: Path) -> ProjectConfig:
             str(runtime.get("directory", ".lfg-runtime")),
             ".lfg-runtime",
         ),
-        board=str(project.get("board", f"lfg-{name}")),
+        board=board,
         planner_provider=str(planning.get("provider", "antigravity")),
         planner_model=default_model,
         planner_fallback_allowed=bool(
@@ -109,6 +122,16 @@ def load_project_config(repository_root: Path) -> ProjectConfig:
         hermes_allow_fallback=bool(
             hermes.get("allow_fallback", planning.get("allow_fallback", False))
         ),
+        hermes_board=hermes_board,
+        hermes_project_slug=hermes_project_slug,
+        hermes_orchestrator_profile=str(hermes["orchestrator_profile"])
+        if hermes.get("orchestrator_profile")
+        else None,
+        hermes_default_assignee=str(hermes.get("default_assignee", "default")),
+        hermes_profile_map={
+            str(key): str(value) for key, value in profile_map_raw.items()
+        },
+        hermes_workspace_mode=str(hermes.get("workspace_mode", "worktree")),
         execution_require_plan_approval=bool(
             execution.get(
                 "require_plan_approval", planning.get("approval_required", True)
