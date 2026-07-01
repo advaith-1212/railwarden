@@ -252,7 +252,7 @@ def test_controller_recovers_from_stale_provider_auth_state(git_repo: Path) -> N
         def health_check(self) -> dict[str, object]:
             return {"name": self.name, "status": "healthy", "model": self.model}
 
-    adapters = {
+    adapters: dict[str, ProviderAdapter] = {
         "codex": HealthyAdapter("codex", "codex", "gpt-5.5", "high"),
         "composer": HealthyAdapter("composer", "grok", "grok-composer-2.5-fast"),
     }

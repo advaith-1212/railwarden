@@ -29,7 +29,7 @@ configured planning/provider defaults.
 ## Runtime Launch
 
 ```bash
-lfg launch
+lfg launch --preset guided
 ```
 
 The local launch path creates or attaches to a deterministic tmux session,
@@ -37,17 +37,28 @@ writes runtime profile state under `.lfg-runtime/`, starts Hermes with an
 LFG-aware runtime profile, and prepares worker panes. Worker processes are
 visible and recoverable from logs/events.
 
+Useful launch variants:
+
+```bash
+lfg launch --preset default-dev-shop
+lfg launch --preset local-only
+lfg launch --profile my-session
+lfg launch --no-attach
+```
+
 Common runtime commands:
 
 ```bash
+lfg snapshot
 lfg status
 lfg dashboard
 lfg observability
-lfg events --limit 50
+lfg events --cursor 0 --limit 50
 lfg logs
 lfg attach
 lfg stop
 lfg restart
+lfg controller --once
 ```
 
 ## Planning And Approval
@@ -94,7 +105,7 @@ lfg context status
 lfg context write ARCHITECTURE.md --content-file /tmp/architecture.md
 lfg result normalize <task-id>
 lfg failure inspect <task-id>
-lfg decision record /tmp/decision.json
+lfg decision record '{"observed_event":{},"diagnosis":"...","allowed_actions":["retry_same_provider"],"chosen_action":"retry_same_provider","rationale":"..."}'
 ```
 
 ## Events
@@ -102,7 +113,7 @@ lfg decision record /tmp/decision.json
 `lfg events` reads the append-only runtime event log:
 
 ```bash
-lfg events --limit 100
+lfg events --cursor 0 --limit 100
 ```
 
 Hermes should use events as signals. LFG emits facts and allowed actions;

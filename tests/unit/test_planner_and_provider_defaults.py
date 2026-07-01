@@ -3,6 +3,8 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
+import pytest
+
 from lfg.config.init import initialize_project
 from lfg.config.loader import load_project_config
 from lfg.planning.antigravity import DEFAULT_PLANNER_MODEL, AntigravityClaudePlanner
@@ -29,7 +31,9 @@ def test_antigravity_planner_command_shape() -> None:
     assert planner.model == "Claude Opus 4.6 (Thinking)"
 
 
-def test_antigravity_command_does_not_probe_doctor(monkeypatch) -> None:
+def test_antigravity_command_does_not_probe_doctor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     planner = AntigravityClaudePlanner()
 
     def fail_doctor() -> object:

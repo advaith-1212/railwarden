@@ -24,16 +24,16 @@ Kanban, dashboards, and consoles are projections over that state.
 
 ## Status
 
-This repository is experimental and actively evolving. The codebase contains
-both the older Hermes Kanban companion path and the newer LFG evented-runtime
-direction. Public documentation describes the target ownership split:
+This repository is experimental and actively evolving. The current direction is
+LFG Evented Runtime + Hermes Supervisor:
 
 - LFG owns deterministic truth and mechanics.
 - Hermes owns interpretation, planning, and orchestration decisions.
 - Worker agents own scoped implementation inside assigned worktrees.
 
-When a command still says "Hermes Kanban" in help output, treat that as a
-compatibility surface, not the architectural source of truth.
+Hermes Kanban support remains as a projection/compatibility surface. Do not use
+it as the canonical database for task state, validation evidence, or merge
+readiness.
 
 ## Install
 
@@ -77,6 +77,7 @@ From the repository you want LFG to manage:
 cd /path/to/project
 lfg setup --yes
 lfg doctor
+lfg context status
 ```
 
 `lfg setup --yes` creates:
@@ -101,18 +102,27 @@ context/CONTRIBUTING_AGENTS.md
 Then launch the local runtime:
 
 ```bash
-lfg launch
+lfg launch --preset guided
+```
+
+Run or sample the supervisor loop:
+
+```bash
+lfg hermes supervisor --once
+lfg hermes supervisor
 ```
 
 Useful observability commands:
 
 ```bash
+lfg snapshot
 lfg status
-lfg events --limit 50
+lfg events --cursor 0 --limit 50
+lfg failure inspect <task-id>
+lfg result normalize <task-id>
 lfg dashboard
 lfg observability
 lfg logs
-lfg hermes supervisor --once
 ```
 
 Compatibility commands for Hermes Kanban projection/import still exist:
@@ -224,6 +234,7 @@ tests/                    unit, contract, and integration tests
 
 ## Documentation
 
+- [User guide](docs/user-guide.md)
 - [Architecture](docs/architecture.md)
 - [Runtime protocol](docs/runtime-protocol.md)
 - [Context model](docs/context.md)

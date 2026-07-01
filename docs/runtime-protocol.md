@@ -104,6 +104,34 @@ lfg hermes supervisor
 lfg hermes supervisor --once
 ```
 
+The supervisor stores its cursor in:
+
+```text
+.lfg-runtime/supervisor/state.json
+```
+
+Hermes decision records are appended to:
+
+```text
+.lfg-runtime/decisions.jsonl
+```
+
+Failure details are written under:
+
+```text
+.lfg-runtime/failures/<task-id>.json
+```
+
+Manual inspection and repair commands:
+
+```bash
+lfg events --cursor 0 --limit 100
+lfg failure inspect <task-id>
+lfg result normalize <task-id>
+lfg retry <task-id>
+lfg handoff <task-id> <provider>
+```
+
 ## Completion Rule
 
 Hermes should only declare completion after LFG verifies:

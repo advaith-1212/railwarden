@@ -414,7 +414,7 @@ def test_guided_launch_creates_named_setup_and_runtime_env(
         return "test-session"
 
     monkeypatch.setattr(cli_main, "create_session", fake_create_session)
-    monkeypatch.setattr(cli_main.getpass, "getpass", lambda _prompt: "azure-secret")
+    monkeypatch.setattr("getpass.getpass", lambda _prompt: "azure-secret")
     monkeypatch.setattr(
         "sys.stdin",
         _TtyStringIO(
