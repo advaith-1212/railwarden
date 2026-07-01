@@ -1,19 +1,47 @@
-# Tmux
+# Tmux Runtime
 
-Each project gets a deterministic `lfg-<project>-<hash>` session with six panes:
+The local launch path uses tmux as an inspectable execution surface. It is a
+runtime UI and process container, not the source of truth.
 
-1. Factory Controller
-2. Hermes Console
+## Session Shape
+
+Each project gets a deterministic session name like:
+
+```text
+lfg-<project>-<hash>
+```
+
+Typical panes:
+
+1. Factory/controller
+2. Hermes console
 3. Codex worker shell
 4. Antigravity worker shell
-5. Grok Composer worker shell
-6. DAG / Queue / Integration Status
+5. Composer worker shell
+6. Observability/dashboard
 
-Pane identifiers are persisted in `.lfg-runtime/state/tmux-session.json`.
-Hermes is interactive alongside the autonomous controller; it is not replaced by
-the controller.
+Pane identifiers are persisted under:
 
-In production launch mode, worker panes remain at a shell prompt. The controller
-sends the exact provider CLI command into the assigned pane, writes a small
-runtime process script under `.lfg-runtime/processes/`, and tees output to the
-task log so code generation is visible and recoverable.
+```text
+.lfg-runtime/state/tmux-session.json
+```
+
+## Process Model
+
+Worker panes are visible execution shells. The controller can send exact
+provider CLI commands into assigned panes, write process metadata under
+`.lfg-runtime/processes/`, and tee output to task logs.
+
+This makes provider work visible, debuggable, and recoverable. The durable
+truth still lives in LFG runtime state and Git.
+
+## Attach And Stop
+
+```bash
+lfg attach
+lfg stop
+lfg restart
+```
+
+Use `lfg events`, `lfg dashboard`, and `lfg observability` to inspect state
+instead of relying only on pane contents.

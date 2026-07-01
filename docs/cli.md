@@ -1,40 +1,166 @@
 # CLI
 
-Commands: `setup`, `init`, `launch`, `observe`, `observability`, `model`,
-`agent`, `quota`, `checkpoint`, `mcp serve`, `adopt`, `run`, `approve plan`,
-`approve-contracts`, `inspect`, `retry`, `reject`, `approve-merge`,
-`abort-goal`, `validate`, `review`, `release-review`, `plan`, `replan`,
-`controller`, `dashboard`, `handoff`, `events`, `integrate`, `start`,
-`attach`, `status`, `stop`, `restart`, `logs`, `doctor`, `config`, `update`,
-`version`, and default `lfg`.
+LFG's CLI manages project setup, runtime state, task execution, validation,
+review, and observability.
 
-Running `lfg launch` in a configured repository starts or attaches to the tmux
-workspace. The Hermes pane in the `factory` window is the place to communicate
-with the rest of the agent system.
+List commands:
 
-Typical flow:
+```bash
+lfg --help
+```
+
+## First Run
+
+In the repository you want LFG to control:
 
 ```bash
 lfg setup --yes
 lfg doctor
+```
+
+`lfg setup --yes` writes committed project files under `.lfg/`, creates context
+templates under `context/`, and ensures ignored runtime paths exist in
+`.gitignore`.
+
+`lfg doctor` checks local prerequisites and prints actionable status for Git,
+Hermes, tmux, provider CLIs, credentials, MCP startup, runtime ignore rules, and
+configured planning/provider defaults.
+
+## Runtime Launch
+
+```bash
 lfg launch
 ```
 
-`lfg setup --yes` creates project config and ignored runtime state. `lfg doctor`
-prints readable checks for Hermes, tmux, provider CLIs, selected credentials,
-the generated Hermes profile, LFG MCP visibility, and git ignore rules.
+The local launch path creates or attaches to a deterministic tmux session,
+writes runtime profile state under `.lfg-runtime/`, starts Hermes with an
+LFG-aware runtime profile, and prepares worker panes. Worker processes are
+visible and recoverable from logs/events.
 
-`lfg launch` uses the guided preset by default unless you pass `--preset`.
-The guided wizard lets you pick role-appropriate providers, create or reuse
-named saved setups, and enter only the fields required for that provider.
-Choose `advanced` only when you want to enter raw model refs directly. Worker
-panes are visible execution shells; the controller sends provider CLI commands
-into them when a tmux session exists.
-`lfg observe` and `lfg observability` render the live DAG, factory lifecycle,
-agents, quotas, tmux panes, provider health, validation/review evidence,
-integration queue, events, and Git graph.
+Common runtime commands:
 
-`lfg update` updates the installed global CLI by running `git pull --ff-only`
-in the LFG source checkout and then `uv tool install --editable <checkout>
---force`. Use `lfg update --source /path/to/lfg` when the running install
-cannot infer the intended source checkout.
+```bash
+lfg status
+lfg dashboard
+lfg observability
+lfg events --limit 50
+lfg logs
+lfg attach
+lfg stop
+lfg restart
+```
+
+## Planning And Approval
+
+```bash
+lfg plan "implement the requested goal"
+lfg approve plan
+lfg approve-contracts
+lfg replan "reason for replan"
+```
+
+The approval gate exists so Hermes can present a plan, the human can approve
+it, and then LFG can freeze work-package contracts, ownership, prompts, and the
+DAG before workers begin.
+
+## Task And Agent Control
+
+```bash
+lfg inspect <task-id>
+lfg retry <task-id>
+lfg reject <task-id>
+lfg handoff <task-id> <provider>
+lfg validate <task-id>
+lfg review <task-id>
+lfg approve-merge <task-id>
+lfg integrate
+```
+
+Agent and quota controls:
+
+```bash
+lfg agent list
+lfg agent pause <agent-id>
+lfg agent resume <agent-id>
+lfg agent swap <agent-id> --to <model-ref>
+lfg quota status
+lfg checkpoint create <task-id>
+```
+
+Context, result, failure, and decision helpers:
+
+```bash
+lfg context status
+lfg context write ARCHITECTURE.md --content-file /tmp/architecture.md
+lfg result normalize <task-id>
+lfg failure inspect <task-id>
+lfg decision record /tmp/decision.json
+```
+
+## Events
+
+`lfg events` reads the append-only runtime event log:
+
+```bash
+lfg events --limit 100
+```
+
+Hermes should use events as signals. LFG emits facts and allowed actions;
+Hermes chooses the action and calls back into LFG.
+
+## MCP
+
+LFG exposes tools for Hermes or any MCP client:
+
+```bash
+lfg mcp serve
+```
+
+Representative tools include:
+
+- `lfg.goal.submit`
+- `lfg.plan.show`
+- `lfg.plan.approve`
+- `lfg.contracts.freeze`
+- `lfg.task.list`
+- `lfg.task.inspect`
+- `lfg.task.route`
+- `lfg.task.retry`
+- `lfg.agent.swap`
+- `lfg.validation.run`
+- `lfg.review.run`
+- `lfg.merge.approve`
+- `lfg.integration.status`
+
+## Hermes Compatibility Commands
+
+The repository still includes Hermes Kanban companion commands:
+
+```bash
+lfg hermes status
+lfg hermes supervisor --once
+lfg hermes bootstrap --dry-run
+lfg hermes bootstrap
+lfg hermes import --dry-run
+lfg hermes import --apply
+lfg hermes console
+```
+
+Use `lfg hermes supervisor` as the reactive loop over LFG events. Use
+`bootstrap` and `import` for a Hermes-facing board/projection. Do not treat the
+Kanban board as the canonical database for task status, validation, merge
+readiness, or commit truth.
+
+## Updating LFG
+
+For editable installs:
+
+```bash
+lfg update
+```
+
+When the running install cannot infer its source checkout:
+
+```bash
+lfg update --source /path/to/lfg
+```
