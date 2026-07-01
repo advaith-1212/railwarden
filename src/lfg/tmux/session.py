@@ -61,10 +61,14 @@ def launch_layout(
         ),
         PaneSpec(
             "hermes",
-            _pane_title(
-                profile.orchestrator, label="Hermes", budget=profile.budget_label
-            ),
+            _pane_title(profile.orchestrator, label="Hermes", budget=profile.budget_label),
             f"{source_env} && cd {root} && {hermes_command}",
+            "factory",
+        ),
+        PaneSpec(
+            "hermes-supervisor",
+            "Hermes Supervisor | role=orchestrator exec=lfg provider=local model=state | healthy",
+            f"{source_env} && cd {root} && PYTHONUNBUFFERED=1 lfg hermes supervisor 2>&1 | tee -a {shlex.quote(str(config.runtime_directory / 'logs' / 'hermes-supervisor.log'))}",
             "factory",
         ),
         PaneSpec(

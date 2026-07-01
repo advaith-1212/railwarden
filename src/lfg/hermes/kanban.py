@@ -362,8 +362,8 @@ def _task_body(config: ProjectConfig, package: WorkPackage) -> str:
         "- Include changed files and validation evidence in kanban_complete metadata.",
         "",
         "Hermes/LFG boundary:",
-        "- Hermes Kanban owns task lifecycle, run history, retries, and handoffs.",
-        "- LFG provides this repo-specific work contract and validation policy.",
+        "- LFG owns task lifecycle, run history, retries, handoffs, and validation.",
+        "- Hermes Kanban is an optional projection and must route writes through LFG.",
     ]
     if package.status_notes:
         lines.extend(["", "Status notes:", package.status_notes])

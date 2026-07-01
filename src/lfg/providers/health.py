@@ -44,6 +44,32 @@ FAILURE_PATTERNS: dict[str, tuple[str, ...]] = {
         "login required",
         "expired token",
     ),
+    "wrapper_quoting_failure": (
+        "unexpected eof while looking for matching",
+        "syntax error near unexpected token",
+        "unterminated quoted string",
+        "bad substitution",
+    ),
+    "missing_worker_result": (
+        "missing worker result",
+        "result json missing",
+        "no result json",
+    ),
+    "validation_command_invalid": (
+        "&;",
+        "validation command invalid",
+        "requires argv list",
+    ),
+    "contract_ownership_gap": (
+        "changed files outside owned paths",
+        "ownership gap",
+        "forbidden path",
+    ),
+    "merge_branch_divergence": (
+        "non-fast-forward",
+        "branch divergence",
+        "merge conflict",
+    ),
     "test_failure": ("pytest", "test failed", "assertionerror"),
 }
 

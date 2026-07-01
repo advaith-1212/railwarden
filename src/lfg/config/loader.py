@@ -229,6 +229,11 @@ def _load_validation_commands(
             cwd = raw.get("cwd", ".")
             argv = raw.get("argv", raw.get("command", []))
         if isinstance(argv, str):
+            if "&;" in argv or "& ;" in argv:
+                raise ConfigurationError(
+                    f"{source}[{index}] uses shell background syntax; "
+                    "use structured argv or an explicit smoke-test command"
+                )
             argv = argv.split()
         if not isinstance(argv, list) or not argv:
             raise ConfigurationError(f"{source}[{index}] requires argv list")

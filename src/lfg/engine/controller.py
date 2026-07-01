@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from lfg.config.models import ProjectConfig, ProjectFiles, WorkPackage
 from lfg.errors import GitError, ValidationError
-from lfg.git import branch_exists, head, is_clean
+from lfg.git import branch_exists, head, is_clean, tracked_is_clean
 from lfg.integration.manager import integrate_one
 from lfg.planning.pipeline import plan_is_approved
 from lfg.processes.supervisor import launch_managed, process_alive
@@ -22,9 +24,11 @@ from lfg.providers.health import (
 )
 from lfg.provisioning.worktrees import ensure_worktree
 from lfg.runtime.checkpoints import CheckpointResult, create_checkpoint_commit
+from lfg.runtime.decisions import emit_decision_required, record_decision
 from lfg.runtime.events import append_event
 from lfg.runtime.handoff import create_handoff_packet
 from lfg.runtime.quota import quota_allows_start
+from lfg.runtime.results import normalize_result
 from lfg.runtime.session import (
     AgentInstance,
     load_session_profile,
@@ -47,6 +51,7 @@ from lfg.validation.worker_result import load_worker_result, validate_completed_
 
 TERMINAL_STATES = {"merged", "blocked", "failed"}
 ACTIVE_STATES = {"assigned", "running", "validating", "reviewing", "integrating"}
+TMUX_STALE_SECONDS = 6 * 60 * 60
 
 
 def _current_goal(config: ProjectConfig) -> str:
@@ -142,6 +147,10 @@ Validation commands:
 
 Context refs:
 {chr(10).join(f"- {item}" for item in package.context_refs) or "- none"}
+
+Context rules:
+- Read every listed context ref before editing.
+- Do not modify context/* unless this package explicitly owns those paths.
 
 Risk / merge policy:
 - risk_level: {package.risk_level}
@@ -331,6 +340,140 @@ def _checkpoint_preserved_work(
         return None
 
 
+def _allowed_actions_for_failure(failure_kind: str) -> list[str]:
+    if failure_kind in {"quota_exhausted", "provider_quota_exhausted", "rate_limited"}:
+        return ["handoff_provider", "ask_user"]
+    if failure_kind in {"authentication", "provider_auth_required"}:
+        return ["handoff_provider", "ask_user"]
+    if failure_kind == "wrapper_quoting_failure":
+        return ["handoff_provider", "repair_adapter", "ask_user"]
+    if failure_kind == "missing_worker_result_with_commit":
+        return ["normalize_result", "retry_same_provider", "handoff_provider"]
+    if failure_kind == "missing_worker_result":
+        return ["retry_same_provider", "handoff_provider", "ask_user"]
+    if failure_kind == "validation_command_invalid":
+        return ["repair_contract", "ask_user"]
+    if failure_kind == "contract_ownership_gap":
+        return ["repair_contract", "ask_user"]
+    if failure_kind == "merge_branch_divergence":
+        return ["reconcile_branch", "ask_user"]
+    return ["retry_same_provider", "handoff_provider", "ask_user"]
+
+
+def _require_decision(
+    files: ProjectFiles,
+    task: dict[str, Any],
+    *,
+    failure_kind: str,
+    facts: dict[str, Any],
+) -> dict[str, Any]:
+    config = files.project
+    allowed_actions = _allowed_actions_for_failure(failure_kind)
+    event = emit_decision_required(
+        config.runtime_directory,
+        task_id=str(task["id"]),
+        failure_kind=failure_kind,
+        facts=facts,
+        allowed_actions=allowed_actions,
+    )
+    return transition_task(
+        config.runtime_directory,
+        task,
+        "decision_required",
+        {
+            "failure_kind": failure_kind,
+            "decision_event": event,
+            "allowed_actions": allowed_actions,
+            "facts": facts,
+        },
+    )
+
+
+def _has_clean_task_commit(config: ProjectConfig, workspace: Path, branch: str) -> bool:
+    if not workspace.exists():
+        return False
+    try:
+        return (
+            tracked_is_clean(workspace)
+            and branch_exists(workspace, branch)
+            and head(workspace) != head(config.repository_root, config.integration_branch)
+        )
+    except GitError:
+        return False
+
+
+def _tmux_process_stale(process: dict[str, Any]) -> bool:
+    if process.get("returncode") is not None or process.get("status") == "exited":
+        return False
+    updated_at = float(process.get("updated_at") or process.get("started_at") or 0)
+    return updated_at > 0 and time.time() - updated_at > TMUX_STALE_SECONDS
+
+
+def _default_supervisor_decisions(files: ProjectFiles) -> None:
+    config = files.project
+    for task in load_tasks(config.runtime_directory):
+        if str(task.get("status")) != "decision_required":
+            continue
+        package = _package_for_task(files, task)
+        if package is None:
+            continue
+        event = task.get("decision_event")
+        observed_event = event if isinstance(event, dict) else {}
+        failure_kind = str(task.get("failure_kind", "decision_required"))
+        allowed = [str(item) for item in task.get("allowed_actions", [])]
+        provider = str(task.get("provider") or task.get("last_provider") or "")
+        branch = str(task.get("branch", package_branch(package)))
+        workspace = Path(str(task.get("worktree", package_worktree(config, package))))
+        result: dict[str, Any]
+        if failure_kind == "missing_worker_result_with_commit" and "normalize_result" in allowed:
+            normalized = normalize_result(config, task=task, package=package)
+            result = transition_task(
+                config.runtime_directory,
+                task,
+                "running",
+                {"runtime_result_path": normalized["path"]},
+            )
+            chosen = "normalize_result"
+            rationale = "clean committed work can be normalized by LFG"
+        elif "handoff_provider" in allowed and provider:
+            result = _handoff_or_block(
+                files,
+                task,
+                package,
+                provider=provider,
+                failure_text=str(task.get("failure", "")),
+                failure_kind=failure_kind,
+                workspace=workspace,
+                branch=branch,
+                log_path=Path(str(task["log_path"])) if task.get("log_path") else None,
+            )
+            chosen = "handoff_provider"
+            rationale = "default supervisor handoff for recoverable failure"
+        elif "retry_same_provider" in allowed:
+            result = transition_task(config.runtime_directory, task, "ready")
+            chosen = "retry_same_provider"
+            rationale = "default supervisor retry for permitted transient failure"
+        else:
+            result = transition_task(
+                config.runtime_directory,
+                task,
+                "blocked",
+                {"reason": "supervisor requires user input"},
+            )
+            chosen = "ask_user"
+            rationale = "no safe automatic recovery action is available"
+        record_decision(
+            config.runtime_directory,
+            observed_event=observed_event,
+            diagnosis=failure_kind,
+            allowed_actions=allowed,
+            chosen_action=chosen,
+            rationale=rationale,
+            tool_call={"name": f"lfg.{chosen}", "task_id": task.get("id")},
+            result=result,
+        )
+
+
 def reconcile_processes(files: ProjectFiles) -> list[dict[str, Any]]:
     config = files.project
     tasks = load_tasks(config.runtime_directory)
@@ -356,17 +499,17 @@ def reconcile_processes(files: ProjectFiles) -> list[dict[str, Any]]:
         result_path = Path(
             str(task.get("result_path", _result_path(config, str(task["id"]))))
         )
-        if result_path.exists():
-            runtime_result = task.get("runtime_result_path")
-            if runtime_result and str(runtime_result) != str(result_path):
-                runtime_path = Path(str(runtime_result))
-                runtime_path.parent.mkdir(parents=True, exist_ok=True)
-                runtime_path.write_text(
-                    result_path.read_text(encoding="utf-8"), encoding="utf-8"
-                )
+        runtime_path = Path(
+            str(task.get("runtime_result_path", _result_path(config, str(task["id"]))))
+        )
+        if result_path.exists() or runtime_path.exists():
+            if result_path.exists():
+                normalized = normalize_result(config, task=task, package=package)
+                runtime_path = Path(str(normalized["path"]))
+            task["runtime_result_path"] = str(runtime_path)
             transition_task(config.runtime_directory, task, "validating")
             advance_workflow(config.runtime_directory, "PACKAGE_VALIDATION")
-            result = load_worker_result(result_path)
+            result = load_worker_result(runtime_path)
             worker_status = result.get("status")
             if worker_status == "success":
                 worker_status = "completed"
@@ -476,6 +619,36 @@ def reconcile_processes(files: ProjectFiles) -> list[dict[str, Any]]:
             "launching",
             "running",
         }:
+            if not _tmux_process_stale(process):
+                continue
+            _require_decision(
+                files,
+                task,
+                failure_kind="stale_running_process",
+                facts={
+                    "provider": provider,
+                    "status": process.get("status"),
+                    "pid": pid,
+                    "updated_at": process.get("updated_at"),
+                    "workspace": str(workspace),
+                    "result_json_exists": False,
+                },
+            )
+            continue
+        if _has_clean_task_commit(config, workspace, branch):
+            _require_decision(
+                files,
+                task,
+                failure_kind="missing_worker_result_with_commit",
+                facts={
+                    "provider": provider,
+                    "commit_exists": True,
+                    "result_json_exists": False,
+                    "worktree_dirty": False,
+                    "workspace": str(workspace),
+                    "branch": branch,
+                },
+            )
             continue
         log_path = Path(str(process.get("log_path", "")))
         failure_text = (
@@ -492,29 +665,42 @@ def reconcile_processes(files: ProjectFiles) -> list[dict[str, Any]]:
             if provider_config is not None
             else 3600,
         )
+        failure_kind = state.failure_kind or "adapter_failure"
+        if "unexpected eof while looking for matching" in failure_text.lower() or (
+            provider == "antigravity" and "syntax error" in failure_text.lower()
+        ):
+            failure_kind = "wrapper_quoting_failure"
         dirty_or_branch = workspace.exists() and (
             not is_clean(workspace) or branch_exists(config.repository_root, branch)
         )
         if dirty_or_branch and config.execution_preserve_partial_work_on_handoff:
-            _set_provider_agent_ready(files, provider, active_task=str(task["id"]))
-            _handoff_or_block(
+            _require_decision(
                 files,
                 task,
-                package,
-                provider=provider,
-                failure_text=failure_text,
-                failure_kind=state.failure_kind or "adapter_failure",
-                workspace=workspace,
-                branch=branch,
-                log_path=log_path,
+                failure_kind=failure_kind,
+                facts={
+                    "provider": provider,
+                    "commit_exists": branch_exists(config.repository_root, branch),
+                    "result_json_exists": False,
+                    "worktree_dirty": workspace.exists() and not is_clean(workspace),
+                    "log_path": str(log_path),
+                    "failure": failure_text[:1000],
+                },
             )
         else:
-            _set_provider_agent_ready(files, provider, active_task=str(task["id"]))
-            transition_task(
-                config.runtime_directory,
+            _require_decision(
+                files,
                 task,
-                "blocked" if state.status == "needs_auth" else "failed",
-                {"failure_kind": state.failure_kind, "failure": failure_text[:1000]},
+                failure_kind=failure_kind,
+                facts={
+                    "provider": provider,
+                    "commit_exists": False,
+                    "result_json_exists": False,
+                    "worktree_dirty": workspace.exists() and not is_clean(workspace),
+                    "log_path": str(log_path),
+                    "provider_status": state.status,
+                    "failure": failure_text[:1000],
+                },
             )
     return load_tasks(config.runtime_directory)
 
@@ -547,7 +733,11 @@ def launch_task(
     result_path.parent.mkdir(parents=True, exist_ok=True)
     prompt_path = _write_prompt(config, package, task, workspace, result_path)
     log_path = _log_path(config, str(task["id"]), attempt, provider)
-    command = adapter.launch_command(workspace, prompt_path, result_path)
+    command = replace(
+        adapter.launch_command(workspace, prompt_path, result_path),
+        cwd=workspace,
+        log_path=log_path,
+    )
     payload = {
         "provider": provider,
         "branch": branch,
@@ -575,8 +765,6 @@ def launch_task(
         if pane_id:
             managed = launch_tmux_managed(
                 command,
-                cwd=workspace,
-                log_path=log_path,
                 pid_path=_process_path(config, str(task["id"])),
                 script_path=_tmux_script_path(config, str(task["id"]), attempt),
                 pane_id=pane_id,
@@ -585,16 +773,19 @@ def launch_task(
         else:
             managed = launch_managed(
                 command,
-                cwd=workspace,
-                log_path=log_path,
                 pid_path=_process_path(config, str(task["id"])),
             )
         process_payload = {
             "pid": managed.pid,
             "pgid": managed.pgid,
             "command": list(managed.command),
+            "cwd": str(command.cwd),
+            "stdin_path": str(command.stdin_path) if command.stdin_path else None,
             "log_path": str(managed.log_path),
             "provider": provider,
+            "status": "running" if not pane_id else "launching",
+            "started_at": time.time(),
+            "updated_at": time.time(),
         }
         if pane_id:
             process_payload.update(
@@ -757,6 +948,7 @@ def controller_tick(
             save_state(config.runtime_directory, state)
     hydrate_task_state(files)
     reconcile_processes(files)
+    _default_supervisor_decisions(files)
     integrated: dict[str, Any] | None = None
     if integrate:
         candidates = integration_candidates(files)

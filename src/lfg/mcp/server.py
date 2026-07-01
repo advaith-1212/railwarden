@@ -16,7 +16,11 @@ from lfg.errors import LfgError
 from lfg.git import changed_files_in_commit, head
 from lfg.planning.pipeline import approve_latest_plan, create_pending_plan
 from lfg.runtime.checkpoints import create_checkpoint_commit
+from lfg.runtime.context import context_status, write_context_file
+from lfg.runtime.decisions import inspect_failure, record_decision
+from lfg.runtime.events import read_events
 from lfg.runtime.quota import load_quota
+from lfg.runtime.results import normalize_result
 from lfg.runtime.session import (
     AgentInstance,
     load_session_profile,
@@ -108,6 +112,18 @@ def tools(start: Path) -> dict[str, Tool]:
             no_args(),
             lambda _payload: _task_list(start),
         ),
+        "lfg.state.snapshot": Tool(
+            "lfg.state.snapshot",
+            "Return an LFG source-of-truth snapshot.",
+            no_args(),
+            lambda _payload: _state_snapshot(start),
+        ),
+        "lfg.events.tail": Tool(
+            "lfg.events.tail",
+            "Tail LFG events after an integer cursor.",
+            no_args({"cursor": {"type": "integer", "minimum": 0}}, []),
+            lambda payload: _events_tail(start, payload),
+        ),
         "lfg.task.route": Tool(
             "lfg.task.route",
             "Route a task to ready or handoff-needed state.",
@@ -131,6 +147,30 @@ def tools(start: Path) -> dict[str, Tool]:
             "Mark a task or work package ready for retry.",
             no_args({"task_id": {"type": "string", "minLength": 1}}, ["task_id"]),
             lambda payload: _task_set_status(start, payload, "ready"),
+        ),
+        "lfg.task.assign": Tool(
+            "lfg.task.assign",
+            "Assign a task to a provider and make it ready.",
+            no_args(
+                {
+                    "task_id": {"type": "string", "minLength": 1},
+                    "provider": {"type": "string", "minLength": 1},
+                },
+                ["task_id", "provider"],
+            ),
+            lambda payload: _task_assign(start, payload),
+        ),
+        "lfg.task.handoff": Tool(
+            "lfg.task.handoff",
+            "Hand off a task to a provider.",
+            no_args(
+                {
+                    "task_id": {"type": "string", "minLength": 1},
+                    "provider": {"type": "string", "minLength": 1},
+                },
+                ["task_id", "provider"],
+            ),
+            lambda payload: _task_handoff(start, payload),
         ),
         "lfg.task.reject": Tool(
             "lfg.task.reject",
@@ -191,6 +231,65 @@ def tools(start: Path) -> dict[str, Tool]:
             "Run independent package review.",
             no_args({"task_id": {"type": "string", "minLength": 1}}, ["task_id"]),
             lambda payload: _review_run(start, payload),
+        ),
+        "lfg.failure.inspect": Tool(
+            "lfg.failure.inspect",
+            "Inspect the latest structured failure for a task.",
+            no_args({"task_id": {"type": "string", "minLength": 1}}, ["task_id"]),
+            lambda payload: _failure_inspect(start, payload),
+        ),
+        "lfg.result.normalize": Tool(
+            "lfg.result.normalize",
+            "Normalize or synthesize an LFG-owned task result.",
+            no_args({"task_id": {"type": "string", "minLength": 1}}, ["task_id"]),
+            lambda payload: _result_normalize(start, payload),
+        ),
+        "lfg.context.status": Tool(
+            "lfg.context.status",
+            "Report context memory files and missing work-package refs.",
+            no_args(),
+            lambda _payload: _context_status(start),
+        ),
+        "lfg.context.write": Tool(
+            "lfg.context.write",
+            "Write one LFG context memory file.",
+            no_args(
+                {
+                    "file": {"type": "string", "minLength": 1},
+                    "content": {"type": "string"},
+                },
+                ["file", "content"],
+            ),
+            lambda payload: _context_write(start, payload),
+        ),
+        "lfg.contract.repair": Tool(
+            "lfg.contract.repair",
+            "Record a contract repair patch for operator review.",
+            no_args(
+                {
+                    "package_id": {"type": "string", "minLength": 1},
+                    "patch": {"type": "object"},
+                },
+                ["package_id", "patch"],
+            ),
+            lambda payload: _contract_repair(start, payload),
+        ),
+        "lfg.decision.record": Tool(
+            "lfg.decision.record",
+            "Append a Hermes supervisor decision record.",
+            no_args(
+                {
+                    "observed_event": {"type": "object"},
+                    "diagnosis": {"type": "string"},
+                    "allowed_actions": {"type": "array", "items": {"type": "string"}},
+                    "chosen_action": {"type": "string"},
+                    "rationale": {"type": "string"},
+                    "tool_call": {"type": "object"},
+                    "result": {"type": "object"},
+                },
+                ["diagnosis", "allowed_actions", "chosen_action", "rationale"],
+            ),
+            lambda payload: _decision_record(start, payload),
         ),
         "lfg.merge.approve": Tool(
             "lfg.merge.approve",
@@ -285,6 +384,20 @@ def fastmcp_server(start: Path | None = None) -> FastMCP:
         return _task_list(root)
 
     @server.tool(
+        name="lfg.state.snapshot",
+        description="Return an LFG source-of-truth snapshot.",
+    )
+    def state_snapshot() -> dict[str, Any]:
+        return _state_snapshot(root)
+
+    @server.tool(
+        name="lfg.events.tail",
+        description="Tail LFG events after an integer cursor.",
+    )
+    def events_tail(cursor: int = 0) -> dict[str, Any]:
+        return _events_tail(root, {"cursor": cursor})
+
+    @server.tool(
         name="lfg.task.route",
         description="Route a task to ready or handoff-needed state.",
     )
@@ -304,6 +417,20 @@ def fastmcp_server(start: Path | None = None) -> FastMCP:
     )
     def task_retry(task_id: NonEmptyString) -> dict[str, Any]:
         return _task_set_status(root, {"task_id": task_id}, "ready")
+
+    @server.tool(
+        name="lfg.task.assign",
+        description="Assign a task to a provider and make it ready.",
+    )
+    def task_assign(task_id: NonEmptyString, provider: NonEmptyString) -> dict[str, Any]:
+        return _task_assign(root, {"task_id": task_id, "provider": provider})
+
+    @server.tool(
+        name="lfg.task.handoff",
+        description="Hand off a task to a provider.",
+    )
+    def task_handoff(task_id: NonEmptyString, provider: NonEmptyString) -> dict[str, Any]:
+        return _task_handoff(root, {"task_id": task_id, "provider": provider})
 
     @server.tool(
         name="lfg.task.reject",
@@ -367,6 +494,67 @@ def fastmcp_server(start: Path | None = None) -> FastMCP:
     )
     def review_run(task_id: NonEmptyString) -> dict[str, Any]:
         return _review_run(root, {"task_id": task_id})
+
+    @server.tool(
+        name="lfg.failure.inspect",
+        description="Inspect the latest structured failure for a task.",
+    )
+    def failure_inspect(task_id: NonEmptyString) -> dict[str, Any]:
+        return _failure_inspect(root, {"task_id": task_id})
+
+    @server.tool(
+        name="lfg.result.normalize",
+        description="Normalize or synthesize an LFG-owned task result.",
+    )
+    def result_normalize(task_id: NonEmptyString) -> dict[str, Any]:
+        return _result_normalize(root, {"task_id": task_id})
+
+    @server.tool(
+        name="lfg.context.status",
+        description="Report context memory files and missing work-package refs.",
+    )
+    def lfg_context_status() -> dict[str, Any]:
+        return _context_status(root)
+
+    @server.tool(
+        name="lfg.context.write",
+        description="Write one LFG context memory file.",
+    )
+    def context_write(file: NonEmptyString, content: str) -> dict[str, Any]:
+        return _context_write(root, {"file": file, "content": content})
+
+    @server.tool(
+        name="lfg.contract.repair",
+        description="Record a contract repair patch for operator review.",
+    )
+    def contract_repair(package_id: NonEmptyString, patch: dict[str, Any]) -> dict[str, Any]:
+        return _contract_repair(root, {"package_id": package_id, "patch": patch})
+
+    @server.tool(
+        name="lfg.decision.record",
+        description="Append a Hermes supervisor decision record.",
+    )
+    def decision_record(
+        diagnosis: str,
+        allowed_actions: list[str],
+        chosen_action: str,
+        rationale: str,
+        observed_event: dict[str, Any] | None = None,
+        tool_call: dict[str, Any] | None = None,
+        result: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return _decision_record(
+            root,
+            {
+                "observed_event": observed_event or {},
+                "diagnosis": diagnosis,
+                "allowed_actions": allowed_actions,
+                "chosen_action": chosen_action,
+                "rationale": rationale,
+                "tool_call": tool_call or {},
+                "result": result or {},
+            },
+        )
 
     @server.tool(
         name="lfg.merge.approve",
@@ -460,6 +648,23 @@ def _task_list(start: Path) -> dict[str, Any]:
     return {"tasks": load_tasks(files.project.runtime_directory)}
 
 
+def _state_snapshot(start: Path) -> dict[str, Any]:
+    files = load_project_files(start)
+    return {
+        "project": files.project.__dict__,
+        "tasks": load_tasks(files.project.runtime_directory),
+        "events": read_events(files.project.runtime_directory, limit=50),
+        "context": context_status(files.project, files.packages),
+    }
+
+
+def _events_tail(start: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    files = load_project_files(start)
+    cursor = int(payload.get("cursor") or 0)
+    events = read_events(files.project.runtime_directory)
+    return {"cursor": len(events), "events": events[cursor:]}
+
+
 def _task_route(start: Path, payload: dict[str, Any]) -> dict[str, Any]:
     files = load_project_files(start)
     for task in load_tasks(files.project.runtime_directory):
@@ -469,6 +674,30 @@ def _task_route(start: Path, payload: dict[str, Any]) -> dict[str, Any]:
             )
             return {"task": updated}
     raise LfgError(f"Unknown task: {payload['task_id']}")
+
+
+def _task_assign(start: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    files = load_project_files(start)
+    task, _package = _task_match(files, str(payload["task_id"]))
+    updated = transition_task(
+        files.project.runtime_directory,
+        task,
+        "ready",
+        {"provider_override": str(payload["provider"])},
+    )
+    return {"task": updated}
+
+
+def _task_handoff(start: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    files = load_project_files(start)
+    task, _package = _task_match(files, str(payload["task_id"]))
+    updated = transition_task(
+        files.project.runtime_directory,
+        task,
+        "handoff_needed",
+        {"provider_override": str(payload["provider"])},
+    )
+    return {"task": updated}
 
 
 def _task_match(files: Any, task_id: str) -> tuple[dict[str, Any], Any]:
@@ -541,6 +770,63 @@ def _review_run(start: Path, payload: dict[str, Any]) -> dict[str, Any]:
         {"review": review},
     )
     return review
+
+
+def _failure_inspect(start: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    files = load_project_files(start)
+    return inspect_failure(files.project.runtime_directory, str(payload["task_id"]))
+
+
+def _result_normalize(start: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    files = load_project_files(start)
+    task, package = _task_match(files, str(payload["task_id"]))
+    return normalize_result(files.project, task=task, package=package)
+
+
+def _context_status(start: Path) -> dict[str, Any]:
+    files = load_project_files(start)
+    return context_status(files.project, files.packages)
+
+
+def _context_write(start: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    files = load_project_files(start)
+    return write_context_file(
+        files.project,
+        str(payload["file"]),
+        str(payload.get("content", "")),
+    )
+
+
+def _contract_repair(start: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    files = load_project_files(start)
+    package_id = str(payload["package_id"])
+    if package_id not in files.packages:
+        raise LfgError(f"Unknown package: {package_id}")
+    path = files.project.runtime_directory / "contract-repairs" / f"{package_id}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(payload.get("patch", {}), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return {"status": "recorded", "package_id": package_id, "path": str(path)}
+
+
+def _decision_record(start: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    files = load_project_files(start)
+    return record_decision(
+        files.project.runtime_directory,
+        observed_event=_dict(payload.get("observed_event")),
+        diagnosis=str(payload["diagnosis"]),
+        allowed_actions=[str(item) for item in payload["allowed_actions"]],
+        chosen_action=str(payload["chosen_action"]),
+        rationale=str(payload["rationale"]),
+        tool_call=_dict(payload.get("tool_call")),
+        result=_dict(payload.get("result")),
+    )
+
+
+def _dict(value: object) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
 
 
 def _goal_abort(start: Path, payload: dict[str, Any]) -> dict[str, Any]:

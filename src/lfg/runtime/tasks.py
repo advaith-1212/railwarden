@@ -14,6 +14,7 @@ TASK_STATES = {
     "running",
     "handoff_needed",
     "cooldown_wait",
+    "decision_required",
     "validating",
     "validated",
     "review_ready",

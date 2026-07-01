@@ -5,6 +5,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from lfg.processes.supervisor import ManagedCommand
 from lfg.providers.health import classify_failure
 
 
@@ -53,7 +54,7 @@ class ProviderAdapter:
 
     def launch_command(
         self, workspace: Path, prompt_path: Path, result_path: Path
-    ) -> list[str]:
+    ) -> ManagedCommand:
         if self.name == "codex":
             command = [
                 self.executable,
@@ -73,29 +74,41 @@ class ProviderAdapter:
                     "--config",
                     f'model_reasoning_effort="{self.reasoning_effort}"',
                 ]
-            return command
+            return ManagedCommand(
+                argv=tuple(command),
+                cwd=workspace,
+                log_path=result_path.parent.parent / "logs" / f"{result_path.stem}-codex.log",
+            )
         if self.name == "antigravity":
-            return [
-                self.executable,
-                "--model",
-                self.model,
-                "--add-dir",
-                str(workspace),
-                "--print",
-                prompt_path.read_text(encoding="utf-8"),
-            ]
+            return ManagedCommand(
+                argv=(
+                    self.executable,
+                    "--model",
+                    self.model,
+                    "--add-dir",
+                    str(workspace),
+                    "--print",
+                ),
+                cwd=workspace,
+                stdin_path=prompt_path,
+                log_path=result_path.parent.parent / "logs" / f"{result_path.stem}-antigravity.log",
+            )
         if self.name == "composer":
-            return [
-                self.executable,
-                "--cwd",
-                str(workspace),
-                "--model",
-                self.model,
-                "--output-format",
-                "json",
-                "--prompt-file",
-                str(prompt_path),
-            ]
+            return ManagedCommand(
+                argv=(
+                    self.executable,
+                    "--cwd",
+                    str(workspace),
+                    "--model",
+                    self.model,
+                    "--output-format",
+                    "json",
+                    "--prompt-file",
+                    str(prompt_path),
+                ),
+                cwd=workspace,
+                log_path=result_path.parent.parent / "logs" / f"{result_path.stem}-composer.log",
+            )
         raise RuntimeError(f"Unsupported provider: {self.name}")
 
     def classify_failure(self, text: str) -> tuple[str, bool, bool, str | None]:

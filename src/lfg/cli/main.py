@@ -8,7 +8,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 from lfg import __version__
 from lfg.config.init import initialize_project
@@ -40,6 +40,8 @@ from lfg.planning.antigravity import AntigravityClaudePlanner
 from lfg.planning.pipeline import approve_latest_plan, create_pending_plan
 from lfg.providers.adapters import default_adapters
 from lfg.runtime.checkpoints import create_checkpoint_commit
+from lfg.runtime.context import context_status, write_context_file
+from lfg.runtime.decisions import inspect_failure, record_decision
 from lfg.runtime.doctor import doctor_report
 from lfg.runtime.events import read_events
 from lfg.runtime.handoff import create_handoff_packet
@@ -52,6 +54,7 @@ from lfg.runtime.launch_setups import (
 )
 from lfg.runtime.model_refs import parse_model_ref
 from lfg.runtime.quota import load_quota, update_usage
+from lfg.runtime.results import normalize_result
 from lfg.runtime.secrets import ensure_runtime_secrets_file
 from lfg.runtime.session import (
     AgentInstance,
@@ -295,6 +298,11 @@ def _build_setup_choices(
     return choices
 
 
+class CreatedSetup(TypedDict):
+    setup: LaunchSetup
+    env: dict[str, str]
+
+
 def _select_setup_for_agent(
     agent: AgentInstance,
     *,
@@ -315,13 +323,15 @@ def _select_setup_for_agent(
     if selected == "keep-current":
         return default_model_ref, agent.model_profile.auth_ref, None
     if selected == "create-new":
-        setup = _create_named_setup(agent)
-        save_launch_setup(setup["setup"], env=setup["env"])
-        setups[setup["setup"].name] = setup["setup"]
+        created = _create_named_setup(agent)
+        save_launch_setup(created["setup"], env=created["env"])
+        setups[created["setup"].name] = created["setup"]
         return (
-            setup["setup"].model_ref,
-            f"env:{setup['setup'].auth_env_var}" if setup["setup"].auth_env_var else None,
-            setup["setup"].name,
+            created["setup"].model_ref,
+            f"env:{created['setup'].auth_env_var}"
+            if created["setup"].auth_env_var
+            else None,
+            created["setup"].name,
         )
     setup = setups[selected]
     return (
@@ -331,7 +341,7 @@ def _select_setup_for_agent(
     )
 
 
-def _create_named_setup(agent: AgentInstance) -> dict[str, object]:
+def _create_named_setup(agent: AgentInstance) -> CreatedSetup:
     provider_choices = ROLE_PROVIDER_CHOICES[_role_provider_key(agent)]
     provider = _prompt_choice(
         next(iter(provider_choices)),
@@ -1066,11 +1076,88 @@ def cmd_dashboard(_args: argparse.Namespace) -> int:
 
 def cmd_events(args: argparse.Namespace) -> int:
     _, files = configured_project(Path.cwd())
+    events = read_events(files.project.runtime_directory)
+    cursor = int(args.cursor or 0)
+    if cursor:
+        events = events[cursor:]
+    if args.limit is not None:
+        events = events[-args.limit :]
+    print(json.dumps({"cursor": cursor + len(events), "events": events}, indent=2))
+    return 0
+
+
+def cmd_snapshot(_args: argparse.Namespace) -> int:
+    _, files = configured_project(Path.cwd())
+    payload = {
+        "project": files.project.__dict__,
+        "tasks": load_tasks(files.project.runtime_directory),
+        "events": read_events(files.project.runtime_directory, limit=50),
+        "context": context_status(files.project, files.packages),
+    }
+    print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    return 0
+
+
+def cmd_failure_inspect(args: argparse.Namespace) -> int:
+    _, files = configured_project(Path.cwd())
     print(
         json.dumps(
-            read_events(files.project.runtime_directory, limit=args.limit), indent=2
+            inspect_failure(files.project.runtime_directory, args.task_id),
+            indent=2,
+            sort_keys=True,
+            default=str,
         )
     )
+    return 0
+
+
+def cmd_result_normalize(args: argparse.Namespace) -> int:
+    _, files = configured_project(Path.cwd())
+    task, package = _task_and_package(files, args.task_id)
+    payload = normalize_result(files.project, task=task, package=package)
+    print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    return 0
+
+
+def cmd_context_status(_args: argparse.Namespace) -> int:
+    _, files = configured_project(Path.cwd())
+    print(
+        json.dumps(
+            context_status(files.project, files.packages),
+            indent=2,
+            sort_keys=True,
+            default=str,
+        )
+    )
+    return 0
+
+
+def cmd_context_write(args: argparse.Namespace) -> int:
+    _, files = configured_project(Path.cwd())
+    content = args.content or ""
+    if args.content_file:
+        content = Path(args.content_file).read_text(encoding="utf-8")
+    payload = write_context_file(files.project, args.file, content)
+    print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    return 0
+
+
+def cmd_decision_record(args: argparse.Namespace) -> int:
+    _, files = configured_project(Path.cwd())
+    payload = json.loads(args.payload)
+    if not isinstance(payload, dict):
+        raise LfgError("Decision payload must be a JSON object")
+    decision = record_decision(
+        files.project.runtime_directory,
+        observed_event=_mapping_or_empty(payload.get("observed_event")),
+        diagnosis=str(payload.get("diagnosis", "")),
+        allowed_actions=[str(item) for item in payload.get("allowed_actions", [])],
+        chosen_action=str(payload.get("chosen_action", "")),
+        rationale=str(payload.get("rationale", "")),
+        tool_call=_mapping_or_empty(payload.get("tool_call")),
+        result=_mapping_or_empty(payload.get("result")),
+    )
+    print(json.dumps(decision, indent=2, sort_keys=True, default=str))
     return 0
 
 
@@ -1685,7 +1772,7 @@ def cmd_worker(args: argparse.Namespace) -> int:
 
 
 def _print_hermes_status(payload: dict[str, object]) -> None:
-    _section("Hermes Kanban companion")
+    _section("Hermes projection")
     print(f"Current board: {payload.get('current_board')}")
     print(f"Project slug: {payload.get('project_slug')}")
     print(
@@ -1908,6 +1995,113 @@ def cmd_hermes_console(_args: argparse.Namespace) -> int:
             print(f"Recorded coordinator instruction: {line}")
 
 
+def _choose_supervisor_action(event: dict[str, Any]) -> tuple[str, str]:
+    payload = _mapping_or_empty(event.get("payload"))
+    failure_kind = str(payload.get("failure_kind", ""))
+    allowed = {str(item) for item in payload.get("allowed_actions", [])}
+    if failure_kind == "missing_worker_result_with_commit" and "normalize_result" in allowed:
+        return "normalize_result", "clean committed work can be normalized by LFG"
+    if failure_kind in {"quota_exhausted", "rate_limited", "provider_quota_exhausted"}:
+        return "handoff_provider", "provider quota is exhausted or rate limited"
+    if failure_kind in {"authentication", "provider_auth_required"}:
+        return "handoff_provider", "provider requires authentication"
+    if failure_kind == "wrapper_quoting_failure":
+        return "handoff_provider", "adapter wrapper failed before worker execution"
+    if "retry_same_provider" in allowed:
+        return "retry_same_provider", "default retry is permitted"
+    if "ask_user" in allowed:
+        return "ask_user", "no deterministic recovery action is available"
+    return "ask_user", "no allowed recovery action matched"
+
+
+def _supervisor_seen_path(runtime_dir: Path) -> Path:
+    return runtime_dir / "supervisor" / "state.json"
+
+
+def _load_supervisor_cursor(runtime_dir: Path) -> int:
+    path = _supervisor_seen_path(runtime_dir)
+    if not path.exists():
+        return 0
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return int(payload.get("cursor", 0)) if isinstance(payload, dict) else 0
+
+
+def _save_supervisor_cursor(runtime_dir: Path, cursor: int) -> None:
+    path = _supervisor_seen_path(runtime_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"cursor": cursor, "updated_at": time.time()}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def cmd_hermes_supervisor(args: argparse.Namespace) -> int:
+    root = discover_repo(Path.cwd())
+    while True:
+        files = load_project_files(root)
+        events = read_events(files.project.runtime_directory)
+        cursor = _load_supervisor_cursor(files.project.runtime_directory)
+        for index, event in enumerate(events[cursor:], start=cursor):
+            if event.get("type") != "decision_required":
+                continue
+            task_id = str(event.get("task_id") or "")
+            try:
+                task, package = _task_and_package(files, task_id)
+            except LfgError:
+                continue
+            if str(task.get("status")) != "decision_required":
+                continue
+            action, rationale = _choose_supervisor_action(event)
+            result: dict[str, Any]
+            if action == "normalize_result":
+                result = normalize_result(files.project, task=task, package=package)
+                transition_task(
+                    files.project.runtime_directory,
+                    task,
+                    "running",
+                    {"runtime_result_path": result["path"]},
+                )
+            elif action == "handoff_provider":
+                result = transition_task(
+                    files.project.runtime_directory,
+                    task,
+                    "handoff_needed",
+                    {"supervisor_action": action},
+                )
+            elif action == "retry_same_provider":
+                result = transition_task(
+                    files.project.runtime_directory,
+                    task,
+                    "ready",
+                    {"supervisor_action": action},
+                )
+            else:
+                result = transition_task(
+                    files.project.runtime_directory,
+                    task,
+                    "blocked",
+                    {"supervisor_action": action, "reason": rationale},
+                )
+            payload = _mapping_or_empty(event.get("payload"))
+            record_decision(
+                files.project.runtime_directory,
+                observed_event=event,
+                diagnosis=str(payload.get("failure_kind", "decision_required")),
+                allowed_actions=[
+                    str(item) for item in payload.get("allowed_actions", [])
+                ],
+                chosen_action=action,
+                rationale=rationale,
+                tool_call={"name": f"lfg.{action}", "task_id": task_id},
+                result=result,
+            )
+            _save_supervisor_cursor(files.project.runtime_directory, index + 1)
+        if args.once:
+            return 0
+        _save_supervisor_cursor(files.project.runtime_directory, len(events))
+        time.sleep(args.interval)
+
+
 def cmd_integrate(args: argparse.Namespace) -> int:
     _, files = configured_project(Path.cwd())
     states = classify_packages(files.project, files.packages)
@@ -1961,6 +2155,7 @@ def build_parser() -> argparse.ArgumentParser:
         ("dashboard", cmd_dashboard),
         ("observability", cmd_observability),
         ("observe", cmd_observability),
+        ("snapshot", cmd_snapshot),
         ("logs", cmd_logs),
         ("doctor", cmd_doctor),
         ("config", cmd_config),
@@ -1981,13 +2176,14 @@ def build_parser() -> argparse.ArgumentParser:
     approve.set_defaults(func=cmd_approve)
     events = sub.add_parser("events")
     events.add_argument("--limit", type=int, default=50)
+    events.add_argument("--cursor", type=int, default=0)
     events.set_defaults(func=cmd_events)
     start = sub.add_parser("start", help="Legacy tmux session start.")
     start.add_argument("--no-attach", action="store_true")
     start.set_defaults(func=cmd_start)
     launch = sub.add_parser(
         "launch",
-        help="Deprecated legacy tmux factory launch; prefer `lfg hermes bootstrap`.",
+        help="Start or attach to the local LFG evented runtime.",
     )
     launch.add_argument("--profile")
     launch.add_argument("--preset", choices=sorted(LAUNCH_PRESETS))
@@ -2003,7 +2199,7 @@ def build_parser() -> argparse.ArgumentParser:
     integrate.set_defaults(func=cmd_integrate)
     controller = sub.add_parser(
         "controller",
-        help="Deprecated legacy LFG scheduler; Hermes Kanban is the default.",
+        help="Run one or more LFG controller ticks over canonical runtime state.",
     )
     controller.add_argument("--once", action="store_true")
     controller.add_argument("--no-launch", action="store_true")
@@ -2074,10 +2270,35 @@ def build_parser() -> argparse.ArgumentParser:
     checkpoint_create = checkpoint_sub.add_parser("create")
     checkpoint_create.add_argument("task_id")
     checkpoint_create.set_defaults(func=cmd_checkpoint_create)
+    result = sub.add_parser("result")
+    result_sub = result.add_subparsers(dest="result_command", required=True)
+    result_normalize = result_sub.add_parser("normalize")
+    result_normalize.add_argument("task_id")
+    result_normalize.set_defaults(func=cmd_result_normalize)
+    context = sub.add_parser("context")
+    context_sub = context.add_subparsers(dest="context_command", required=True)
+    context_sub.add_parser("status").set_defaults(func=cmd_context_status)
+    context_write = context_sub.add_parser("write")
+    context_write.add_argument("file")
+    context_write.add_argument("content", nargs="?")
+    context_write.add_argument("--content-file")
+    context_write.set_defaults(func=cmd_context_write)
+    failure = sub.add_parser("failure")
+    failure_sub = failure.add_subparsers(dest="failure_command", required=True)
+    failure_inspect = failure_sub.add_parser("inspect")
+    failure_inspect.add_argument("task_id")
+    failure_inspect.set_defaults(func=cmd_failure_inspect)
+    decision = sub.add_parser("decision")
+    decision_sub = decision.add_subparsers(dest="decision_command", required=True)
+    decision_record = decision_sub.add_parser("record")
+    decision_record.add_argument("payload")
+    decision_record.set_defaults(func=cmd_decision_record)
     mcp = sub.add_parser("mcp")
     mcp.add_argument("mcp_command", choices=["serve"])
     mcp.set_defaults(func=cmd_mcp)
-    hermes = sub.add_parser("hermes", help="Hermes Kanban companion commands.")
+    hermes = sub.add_parser(
+        "hermes", help="Hermes supervisor and Kanban projection commands."
+    )
     hermes.set_defaults(func=cmd_hermes_console)
     hermes_sub = hermes.add_subparsers(dest="hermes_command")
     hermes_status_parser = hermes_sub.add_parser("status")
@@ -2093,6 +2314,10 @@ def build_parser() -> argparse.ArgumentParser:
     import_mode.add_argument("--apply", action="store_true")
     hermes_import.add_argument("--json", action="store_true")
     hermes_import.set_defaults(func=cmd_hermes_import)
+    hermes_supervisor = hermes_sub.add_parser("supervisor")
+    hermes_supervisor.add_argument("--once", action="store_true")
+    hermes_supervisor.add_argument("--interval", type=float, default=5.0)
+    hermes_supervisor.set_defaults(func=cmd_hermes_supervisor)
     hermes_sub.add_parser("console").set_defaults(func=cmd_hermes_console)
     sub.add_parser("version").set_defaults(func=lambda _args: print(__version__) or 0)
     return parser

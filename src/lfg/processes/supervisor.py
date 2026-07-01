@@ -5,10 +5,20 @@ import signal
 import subprocess
 import threading
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 from lfg.util.atomic import atomic_write_json
+
+
+@dataclass(frozen=True)
+class ManagedCommand:
+    argv: tuple[str, ...]
+    cwd: Path
+    log_path: Path
+    stdin_path: Path | None = None
+    env: Mapping[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -25,20 +35,50 @@ def _drain(stream: object, log_handle: object) -> None:
         log_handle.flush()  # type: ignore[attr-defined]
 
 
+def coerce_command(
+    command: ManagedCommand | list[str],
+    *,
+    cwd: Path | None = None,
+    log_path: Path | None = None,
+) -> ManagedCommand:
+    if isinstance(command, ManagedCommand):
+        return command
+    if cwd is None or log_path is None:
+        raise RuntimeError("cwd and log_path are required for raw argv commands")
+    return ManagedCommand(argv=tuple(command), cwd=cwd, log_path=log_path)
+
+
 def launch_managed(
-    command: list[str], *, cwd: Path, log_path: Path, pid_path: Path
+    command: ManagedCommand | list[str],
+    *,
+    cwd: Path | None = None,
+    log_path: Path | None = None,
+    pid_path: Path,
 ) -> ManagedProcess:
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    log_handle = log_path.open("a", encoding="utf-8")
+    managed_command = coerce_command(command, cwd=cwd, log_path=log_path)
+    managed_command.log_path.parent.mkdir(parents=True, exist_ok=True)
+    stdin_handle = (
+        managed_command.stdin_path.open("r", encoding="utf-8")
+        if managed_command.stdin_path is not None
+        else None
+    )
+    log_handle = managed_command.log_path.open("a", encoding="utf-8")
+    env = os.environ.copy()
+    if managed_command.env:
+        env.update(managed_command.env)
     process = subprocess.Popen(
-        command,
-        cwd=cwd,
+        list(managed_command.argv),
+        cwd=managed_command.cwd,
+        stdin=stdin_handle,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         start_new_session=True,
         bufsize=1,
+        env=env,
     )
+    if stdin_handle is not None:
+        stdin_handle.close()
     if process.stdout is None or process.stderr is None:
         process.kill()
         raise RuntimeError("Process pipes were not created")
@@ -50,15 +90,25 @@ def launch_managed(
     ).start()
     pgid = os.getpgid(process.pid)
     managed = ManagedProcess(
-        pid=process.pid, pgid=pgid, command=tuple(command), log_path=log_path
+        pid=process.pid,
+        pgid=pgid,
+        command=managed_command.argv,
+        log_path=managed_command.log_path,
     )
     atomic_write_json(
         pid_path,
         {
             "pid": managed.pid,
             "pgid": managed.pgid,
-            "command": list(command),
-            "log_path": str(log_path),
+            "command": list(managed.command),
+            "cwd": str(managed_command.cwd),
+            "stdin_path": str(managed_command.stdin_path)
+            if managed_command.stdin_path is not None
+            else None,
+            "log_path": str(managed.log_path),
+            "status": "running",
+            "started_at": time.time(),
+            "updated_at": time.time(),
         },
     )
     return managed
