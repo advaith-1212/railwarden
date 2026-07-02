@@ -142,7 +142,7 @@ def _hermes_provider(provider: str) -> str:
         "gemini": "google",
         "ollama": "ollama-launch",
         "openai-compatible": "openai",
-        "azure-foundry": "azure",
+        "azure-foundry": "openai",
     }
     return mapping.get(provider, provider)
 

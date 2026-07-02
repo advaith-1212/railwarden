@@ -24,6 +24,7 @@ from lfg.providers.health import (
 )
 from lfg.provisioning.worktrees import ensure_worktree
 from lfg.runtime.checkpoints import CheckpointResult, create_checkpoint_commit
+from lfg.runtime.context import context_status
 from lfg.runtime.decisions import emit_decision_required, record_decision
 from lfg.runtime.events import append_event
 from lfg.runtime.handoff import create_handoff_packet
@@ -51,7 +52,7 @@ from lfg.validation.worker_result import load_worker_result, validate_completed_
 
 TERMINAL_STATES = {"merged", "blocked", "failed"}
 ACTIVE_STATES = {"assigned", "running", "validating", "reviewing", "integrating"}
-TMUX_STALE_SECONDS = 6 * 60 * 60
+TMUX_STALE_SECONDS = 30 * 60
 
 
 def _current_goal(config: ProjectConfig) -> str:
@@ -613,6 +614,8 @@ def reconcile_processes(files: ProjectFiles) -> list[dict[str, Any]]:
                 )
             continue
         pid = int(process.get("pid", 0))
+        if task.get("pid", 0) == 0 and pid > 0:
+            task["pid"] = pid
         if pid > 0 and process_alive(pid):
             continue
         if process.get("mode") == "tmux" and process.get("status") in {
@@ -940,6 +943,10 @@ def controller_tick(
     if not plan_is_approved(config):
         append_event(config.runtime_directory, "controller_waiting_for_plan_approval")
         return {"status": "waiting_for_plan_approval", "launched": []}
+    context_stat = context_status(config, files.packages)
+    if context_stat.get("status") == "needs_population":
+        append_event(config.runtime_directory, "controller_waiting_for_context_population")
+        return {"status": "waiting_for_context_population", "launched": []}
     adapters = adapters or default_adapters()
     _refresh_provider_health(files, adapters)
     for provider in config.worker_providers:

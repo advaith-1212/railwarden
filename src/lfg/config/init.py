@@ -142,17 +142,19 @@ def initialize_project(repository_root: Path, *, yes: bool) -> dict[str, str]:
         atomic_write_text(config_dir / "state-schema-version", "1.0.0\n")
         ensure_context_templates(repository_root)
     proposal = ensure_gitignore(repository_root, yes=yes)
+    needs_commit = False
     if yes:
-        ensure_integration_baseline(repository_root, "integration/lfg")
+        needs_commit = ensure_integration_baseline(repository_root, "integration/lfg")
     branch = output(repository_root, "branch", "--show-current")
     return {
         "repository": str(repository_root),
         "branch": branch,
         "gitignore_proposal": proposal,
+        "needs_commit": needs_commit,
     }
 
 
-def ensure_integration_baseline(repository_root: Path, integration_branch: str) -> None:
+def ensure_integration_baseline(repository_root: Path, integration_branch: str) -> bool:
     has_head = (
         run_git(
             repository_root, "rev-parse", "--verify", "HEAD", check=False
@@ -181,8 +183,16 @@ def ensure_integration_baseline(repository_root: Path, integration_branch: str) 
             ).returncode
             == 0
         )
+        needs_commit = False
+    else:
+        run_git(repository_root, "add", ".gitignore", ".lfg", "context")
+        staged = run_git(
+            repository_root, "diff", "--cached", "--quiet", check=False
+        ).returncode
+        needs_commit = staged != 0
     if has_head and not branch_exists(repository_root, integration_branch):
         run_git(repository_root, "branch", integration_branch)
+    return needs_commit
 
 
 def ensure_context_templates(repository_root: Path) -> None:

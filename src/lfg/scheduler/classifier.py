@@ -36,8 +36,8 @@ def package_branch(package: WorkPackage) -> str:
 
 def package_worktree(config: ProjectConfig, package: WorkPackage) -> Path:
     if package.worktree is not None:
-        path = package.worktree
-        return path if path.is_absolute() else config.repository_root / path
+        path = Path(package.worktree)
+        return path if path.is_absolute() else config.worktree_root / path
     return config.worktree_root / package.package_id.lower().replace("-", "")
 
 

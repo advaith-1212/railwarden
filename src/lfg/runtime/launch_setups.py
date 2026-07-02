@@ -72,6 +72,11 @@ def load_launch_setups() -> dict[str, LaunchSetup]:
 
 def save_launch_setup(setup: LaunchSetup, *, env: dict[str, str] | None = None) -> None:
     _validate_setup_name(setup.name)
+    if "gpt" in setup.name.lower() and "gpt" in setup.model.lower():
+        name_nums = re.findall(r'gpt[-_]?(\d+(?:\.\d+)?)', setup.name.lower())
+        model_nums = re.findall(r'gpt[-_]?(\d+(?:\.\d+)?)', setup.model.lower())
+        if name_nums and model_nums and name_nums[0] != model_nums[0]:
+            raise ConfigurationError(f"Setup name '{setup.name}' implies a different model version than configured model '{setup.model}'.")
     registry = load_launch_setups()
     registry[setup.name] = setup
     path = setup_registry_path()

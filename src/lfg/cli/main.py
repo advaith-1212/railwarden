@@ -148,8 +148,10 @@ def cmd_setup(args: argparse.Namespace) -> int:
             )
             print("Then run `lfg doctor` to verify Hermes, tmux, providers, and MCP.")
             return 0
-        initialize_project(root, yes=True)
+        result = initialize_project(root, yes=True)
         print("Created .lfg project configuration.")
+        if result.get("needs_commit"):
+            print("Configuration files have been staged. Please commit them before proceeding.")
     else:
         print("Project configuration already exists.")
     print()
@@ -1887,9 +1889,9 @@ def cmd_hermes_import(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_hermes_console(_args: argparse.Namespace) -> int:
+def cmd_console(_args: argparse.Namespace) -> int:
     _, files = configured_project(Path.cwd())
-    print("LFG Hermes console.")
+    print("LFG Planning Console.")
     print(
         "Commands: goal <text>, approve plan, status, dag, agents, tasks, logs, pause, resume, stop-after-current, quit"
     )
@@ -1898,7 +1900,7 @@ def cmd_hermes_console(_args: argparse.Namespace) -> int:
     )
     while True:
         try:
-            line = input("hermes> ").strip()
+            line = input("lfg> ").strip()
         except EOFError:
             return 0
         if line in {"quit", "exit"}:
@@ -2178,6 +2180,8 @@ def build_parser() -> argparse.ArgumentParser:
     events.add_argument("--limit", type=int, default=50)
     events.add_argument("--cursor", type=int, default=0)
     events.set_defaults(func=cmd_events)
+    console = sub.add_parser("console", help="Open the LFG planning console")
+    console.set_defaults(func=cmd_console)
     start = sub.add_parser("start", help="Legacy tmux session start.")
     start.add_argument("--no-attach", action="store_true")
     start.set_defaults(func=cmd_start)
@@ -2299,7 +2303,7 @@ def build_parser() -> argparse.ArgumentParser:
     hermes = sub.add_parser(
         "hermes", help="Hermes supervisor and Kanban projection commands."
     )
-    hermes.set_defaults(func=cmd_hermes_console)
+    # Removed backwards-compatible 'hermes console' default because it's replaced by top-level console
     hermes_sub = hermes.add_subparsers(dest="hermes_command")
     hermes_status_parser = hermes_sub.add_parser("status")
     hermes_status_parser.add_argument("--json", action="store_true")
@@ -2318,7 +2322,7 @@ def build_parser() -> argparse.ArgumentParser:
     hermes_supervisor.add_argument("--once", action="store_true")
     hermes_supervisor.add_argument("--interval", type=float, default=5.0)
     hermes_supervisor.set_defaults(func=cmd_hermes_supervisor)
-    hermes_sub.add_parser("console").set_defaults(func=cmd_hermes_console)
+    # Removed hermes console subcommand
     sub.add_parser("version").set_defaults(func=lambda _args: print(__version__) or 0)
     return parser
 

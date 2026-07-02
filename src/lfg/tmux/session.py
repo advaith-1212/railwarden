@@ -274,6 +274,7 @@ def _create_v2_session(
 ) -> str:
     root = str(config.repository_root)
     config.runtime_directory.mkdir(parents=True, exist_ok=True)
+    (config.runtime_directory / "logs").mkdir(parents=True, exist_ok=True)
     factory = tmux(
         [
             "new-session",
@@ -366,6 +367,18 @@ def stop_session(config: ProjectConfig) -> bool:
     name = session_name(config)
     if not has_session(name):
         return False
+    import json
+    from lfg.processes.supervisor import terminate_process_group
+    processes_dir = config.runtime_directory / "processes"
+    if processes_dir.exists():
+        for process_file in processes_dir.glob("*.json"):
+            try:
+                payload = json.loads(process_file.read_text(encoding="utf-8"))
+                pgid = int(payload.get("pgid", payload.get("pid", 0)))
+                if pgid > 0:
+                    terminate_process_group(pgid)
+            except Exception:
+                pass
     tmux(["kill-session", "-t", name])
     return True
 

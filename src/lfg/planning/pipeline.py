@@ -42,7 +42,7 @@ Create a software implementation plan and DAG work packages for this goal.
 Goal:
 {goal}
 
-Return strict JSON only. No prose and no markdown fence.
+Return JSON only. You may wrap it in a ```json fence.
 
 Required shape:
 {{
@@ -112,7 +112,7 @@ Human-readable plan:
 {plan_markdown.strip()}
 ```
 
-Return strict JSON only. No prose, no markdown fence.
+Return JSON only. You may wrap it in a ```json fence.
 
 Required shape:
 {{
