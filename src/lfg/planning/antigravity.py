@@ -8,6 +8,39 @@ from pathlib import Path
 DEFAULT_PLANNER_MODEL = "Claude Opus 4.6 (Thinking)"
 
 
+def antigravity_model_slug(model: str) -> str:
+    return (
+        model.lower()
+        .replace("(", "")
+        .replace(")", "")
+        .replace("/", "-")
+        .replace(" ", "-")
+        .replace("--", "-")
+    )
+
+
+def resolve_antigravity_model(
+    model: str,
+    *,
+    available_models: tuple[str, ...] | None = None,
+) -> str:
+    text = model.strip()
+    if not text:
+        return DEFAULT_PLANNER_MODEL
+    if " " in text or "(" in text:
+        return text
+    models = (
+        available_models
+        if available_models is not None
+        else AntigravityClaudePlanner().doctor().available_models
+    )
+    target = antigravity_model_slug(text)
+    for candidate in models:
+        if antigravity_model_slug(candidate) == target:
+            return candidate
+    return text
+
+
 @dataclass(frozen=True)
 class AntigravityPlannerStatus:
     detected: bool

@@ -858,10 +858,15 @@ def _adapter_for_session_agent(
     agent = _agent_for_provider(files, provider)
     if agent is None:
         return adapter
+    model = agent.model_profile.model
+    if provider == "antigravity":
+        from lfg.planning.antigravity import resolve_antigravity_model
+
+        model = resolve_antigravity_model(model)
     return ProviderAdapter(
         name=adapter.name,
         executable=adapter.executable,
-        model=agent.model_profile.model,
+        model=model,
         reasoning_effort=agent.model_profile.reasoning_effort,
     )
 

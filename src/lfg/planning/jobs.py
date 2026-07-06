@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -56,11 +57,33 @@ def start_planning_job(
             )
     active = active_planning_job(runtime_dir)
     if active is not None:
-        return {
-            "run_id": str(active["run_id"]),
-            "status": "planning",
-            "goal": active.get("goal"),
-        }
+        run_id = str(active["run_id"])
+        job_path = planning_job_path(runtime_dir, run_id)
+        age = time.time() - job_path.stat().st_mtime
+        if _planning_worker_running(run_id) or age < 5.0:
+            return {
+                "run_id": run_id,
+                "status": "planning",
+                "goal": active.get("goal"),
+            }
+        _write_job(
+            runtime_dir,
+            run_id,
+            {
+                "run_id": run_id,
+                "goal": active.get("goal"),
+                "status": "failed",
+                "error": (
+                    "Planning worker exited without finishing. "
+                    "Re-submit the goal to start a new planning run."
+                ),
+            },
+        )
+        append_event(
+            runtime_dir,
+            "planning_failed",
+            {"run_id": run_id, "error": "stale planning job recovered"},
+        )
 
     run_id = new_run_id()
     job = {
@@ -120,6 +143,19 @@ def execute_planning_job(config: ProjectConfig, run_id: str) -> None:
             {"run_id": run_id, "error": str(exc)},
         )
         raise
+
+
+def _planning_worker_running(run_id: str) -> bool:
+    try:
+        completed = subprocess.run(
+            ["pgrep", "-f", f"lfg.cli.main planning-worker --run-id {run_id}"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        return False
+    return completed.returncode == 0
 
 
 def _spawn_planning_worker(config: ProjectConfig, run_id: str) -> None:
