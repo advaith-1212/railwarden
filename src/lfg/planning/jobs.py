@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import os
-import threading
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -70,48 +71,77 @@ def start_planning_job(
     }
     _write_job(runtime_dir, run_id, job)
     append_event(runtime_dir, "planning_started", {"run_id": run_id, "goal": goal})
-
-    def worker() -> None:
-        try:
-            fixture_path = os.environ.get("LFG_PLANNER_OUTPUT")
-            fixture = (
-                Path(fixture_path).read_text(encoding="utf-8")
-                if fixture_path
-                else None
-            )
-            pending_plan = create_pending_plan(
-                config, goal, planner_output_text=fixture
-            )
-            finished = {
-                "run_id": pending_plan.run_id,
-                "goal": pending_plan.goal,
-                "status": "ready",
-                "error": None,
-            }
-            _write_job(runtime_dir, run_id, finished)
-            append_event(
-                runtime_dir,
-                "planning_finished",
-                {"run_id": pending_plan.run_id},
-            )
-        except Exception as exc:
-            failed = {
-                "run_id": run_id,
-                "goal": goal.strip(),
-                "status": "failed",
-                "error": str(exc),
-            }
-            _write_job(runtime_dir, run_id, failed)
-            append_event(
-                runtime_dir,
-                "planning_failed",
-                {"run_id": run_id, "error": str(exc)},
-            )
-
-    threading.Thread(
-        target=worker, daemon=True, name=f"lfg-plan-{run_id}"
-    ).start()
+    _spawn_planning_worker(config, run_id)
     return {"run_id": run_id, "status": "planning", "goal": goal.strip()}
+
+
+def execute_planning_job(config: ProjectConfig, run_id: str) -> None:
+    runtime_dir = config.runtime_directory
+    path = planning_job_path(runtime_dir, run_id)
+    if not path.exists():
+        raise LfgError(f"Planning job not found: {run_id}")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise LfgError(f"Invalid planning job: {path}")
+    goal = str(payload.get("goal", "")).strip()
+    if not goal:
+        raise LfgError(f"Planning job {run_id} is missing a goal")
+    try:
+        fixture_path = os.environ.get("LFG_PLANNER_OUTPUT")
+        fixture = (
+            Path(fixture_path).read_text(encoding="utf-8") if fixture_path else None
+        )
+        pending_plan = create_pending_plan(
+            config, goal, planner_output_text=fixture
+        )
+        finished = {
+            "run_id": pending_plan.run_id,
+            "goal": pending_plan.goal,
+            "status": "ready",
+            "error": None,
+        }
+        _write_job(runtime_dir, run_id, finished)
+        append_event(
+            runtime_dir,
+            "planning_finished",
+            {"run_id": pending_plan.run_id},
+        )
+    except Exception as exc:
+        failed = {
+            "run_id": run_id,
+            "goal": goal,
+            "status": "failed",
+            "error": str(exc),
+        }
+        _write_job(runtime_dir, run_id, failed)
+        append_event(
+            runtime_dir,
+            "planning_failed",
+            {"run_id": run_id, "error": str(exc)},
+        )
+        raise
+
+
+def _spawn_planning_worker(config: ProjectConfig, run_id: str) -> None:
+    log_dir = config.runtime_directory / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"planning-{run_id}.log"
+    with log_path.open("ab") as log_handle:
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "lfg.cli.main",
+                "planning-worker",
+                "--run-id",
+                run_id,
+            ],
+            cwd=str(config.repository_root),
+            stdin=subprocess.DEVNULL,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
 
 
 def planning_status(

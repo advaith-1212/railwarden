@@ -37,6 +37,7 @@ from lfg.mcp.server import serve as serve_mcp
 from lfg.migration.tmom import dry_run_tmom_adoption
 from lfg.models.registry import list_models, validate_model_refs
 from lfg.planning.antigravity import AntigravityClaudePlanner
+from lfg.planning.jobs import execute_planning_job
 from lfg.planning.pipeline import approve_latest_plan, create_pending_plan
 from lfg.providers.adapters import default_adapters
 from lfg.runtime.checkpoints import create_checkpoint_commit
@@ -201,6 +202,15 @@ def cmd_run(args: argparse.Namespace) -> int:
     print(f"Created pending plan: {pending.run_id}")
     print(pending.plan_markdown)
     print("Run `lfg approve plan` to begin execution.")
+    return 0
+
+
+def cmd_planning_worker(args: argparse.Namespace) -> int:
+    _, files = configured_project(Path.cwd())
+    try:
+        execute_planning_job(files.project, args.run_id)
+    except Exception:
+        return 1
     return 0
 
 
@@ -2198,6 +2208,12 @@ def build_parser() -> argparse.ArgumentParser:
     run = sub.add_parser("run")
     run.add_argument("goal")
     run.set_defaults(func=cmd_run)
+    planning_worker = sub.add_parser(
+        "planning-worker",
+        help=argparse.SUPPRESS,
+    )
+    planning_worker.add_argument("--run-id", required=True)
+    planning_worker.set_defaults(func=cmd_planning_worker)
     approve = sub.add_parser("approve")
     approve.add_argument("target")
     approve.set_defaults(func=cmd_approve)
