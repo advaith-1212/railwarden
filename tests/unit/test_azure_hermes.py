@@ -34,12 +34,32 @@ def test_resolve_azure_hermes_config_openai_v1() -> None:
     config = resolve_azure_hermes_config(
         endpoint="https://example.openai.azure.com",
         deployment="gpt-5.4",
-        api_version="2024-10-21",
+        api_version="2025-11-15-preview",
     )
     assert config.provider == "azure-foundry"
-    assert "/openai/v1" in config.base_url
+    assert config.base_url == "https://example.openai.azure.com/openai/v1"
     assert config.api_mode == "codex_responses"
+    assert config.api_version == "2025-11-15-preview"
+    assert "api-version=" not in config.base_url
+
+
+def test_resolve_azure_hermes_config_legacy_endpoint_appends_api_version() -> None:
+    config = resolve_azure_hermes_config(
+        endpoint="https://example.openai.azure.com/openai/deployments/gpt-5.4",
+        deployment="gpt-5.4",
+        api_version="2024-10-21",
+    )
     assert "api-version=2024-10-21" in config.base_url
+
+
+def test_parse_azure_foundry_model_ref_splits_endpoint() -> None:
+    from lfg.runtime.model_refs import parse_model_ref
+
+    parsed = parse_model_ref(
+        "azure-foundry:gpt-5.4@https://corellm.openai.azure.com/openai/v1"
+    )
+    assert parsed.model == "gpt-5.4"
+    assert parsed.base_url == "https://corellm.openai.azure.com/openai/v1"
 
 
 def test_generated_hermes_config_uses_azure_foundry_provider(git_repo: Path) -> None:
@@ -89,3 +109,5 @@ def test_generated_hermes_config_uses_azure_foundry_provider(git_repo: Path) -> 
     assert payload["model"]["provider"] == "azure-foundry"
     assert "openai/v1" in str(payload["model"]["base_url"])
     assert payload["model"]["api_mode"] == "codex_responses"
+    assert "api-version=" not in str(payload["model"]["base_url"])
+    assert payload["model"]["default"] == "gpt-5.4"

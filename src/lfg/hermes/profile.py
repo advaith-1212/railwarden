@@ -8,6 +8,7 @@ from pathlib import Path
 import yaml
 
 from lfg.config.models import ProjectConfig
+from lfg.errors import LfgError
 from lfg.hermes.azure import resolve_azure_hermes_config
 from lfg.runtime.launch_setups import load_setup_env, write_runtime_env
 from lfg.runtime.secrets import ensure_runtime_secrets_file
@@ -59,6 +60,7 @@ def generate_hermes_profile(
     mcp_config_path = home / "mcp.json"
     env_path = ensure_runtime_secrets_file(home)
     runtime_env = write_runtime_env(env_path, _session_setup_names(session))
+    _write_hermes_dotenv(home, runtime_env)
     _inherit_existing_auth(home)
     skill_dirs = [
         str(config.repository_root / ".lfg" / "skills"),
@@ -104,6 +106,7 @@ def generate_hermes_profile(
         },
     }
     atomic_write_text(config_path, yaml.safe_dump(payload, sort_keys=False))
+    validate_hermes_orchestrator_config(session, config_path)
     executable = hermes_executable() or "hermes"
     hermes_command = (
         "env",
@@ -125,6 +128,51 @@ def generate_hermes_profile(
         mcp_config_path=mcp_config_path,
         command=hermes_command,
     )
+
+
+def validate_hermes_orchestrator_config(
+    session: SessionProfile, config_path: Path
+) -> None:
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise LfgError(f"Invalid Hermes config: {config_path}")
+    model = payload.get("model")
+    if not isinstance(model, dict):
+        raise LfgError(f"Hermes config is missing model settings: {config_path}")
+    expected = _hermes_provider(session.orchestrator.model_profile.provider)
+    actual = model.get("provider")
+    if actual != expected:
+        raise LfgError(
+            f"Hermes config provider {actual!r} does not match session orchestrator "
+            f"{expected!r}. Re-run `lfg launch` to regenerate Hermes config."
+        )
+    if expected == "azure-foundry":
+        deployment = session.orchestrator.model_profile.model
+        if model.get("default") != deployment:
+            raise LfgError(
+                f"Hermes deployment {model.get('default')!r} does not match session "
+                f"orchestrator model {deployment!r}."
+            )
+        if not model.get("base_url"):
+            raise LfgError(
+                "Hermes Azure config is missing base_url. Ensure the orchestrator "
+                "setup saved AZURE_OPENAI_ENDPOINT and re-run `lfg launch`."
+            )
+        if not model.get("api_mode"):
+            raise LfgError(
+                "Hermes Azure config is missing api_mode. Re-run `lfg launch`."
+            )
+
+
+def _write_hermes_dotenv(home: Path, env: dict[str, str]) -> None:
+    if not env:
+        return
+    dotenv_path = home / ".env"
+    lines = ["# Hermes runtime secrets for LFG. This file must remain ignored by git."]
+    for key in sorted(env):
+        lines.append(f"{key}={json.dumps(env[key])}")
+    atomic_write_text(dotenv_path, "\n".join(lines) + "\n")
+    dotenv_path.chmod(0o600)
 
 
 def _lfg_mcp_command() -> list[str]:
@@ -152,9 +200,10 @@ def _orchestrator_model_payload(
     payload: dict[str, object] = {
         "provider": provider,
         "default": profile.model,
-        "name": profile.model,
-        "reasoning_effort": profile.reasoning_effort,
     }
+    if profile.reasoning_effort and provider != "azure-foundry":
+        payload["name"] = profile.model
+        payload["reasoning_effort"] = profile.reasoning_effort
     base_url = _orchestrator_base_url(session, runtime_env)
     api_version = runtime_env.get("OPENAI_API_VERSION")
     if provider == "azure-foundry" and base_url:

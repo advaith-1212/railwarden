@@ -370,14 +370,20 @@ def _create_named_setup(agent: AgentInstance) -> CreatedSetup:
             "Azure API key",
             hint="Stored in ~/.lfg/launch-setups.d/ and .lfg-runtime/hermes/.../secrets.env",
         )
-        api_version = _prompt("2024-10-21", "Azure OpenAI API version")
+        api_version = _prompt(
+            "",
+            "Azure OpenAI API version",
+            hint="Leave blank for /openai/v1 GA endpoints. Required only for legacy URLs.",
+        )
         base_url = endpoint
         env[auth_env_var] = api_key
         env["AZURE_FOUNDRY_API_KEY"] = api_key
         env["AZURE_OPENAI_API_KEY"] = api_key
         env["AZURE_OPENAI_ENDPOINT"] = endpoint
         env["AZURE_AI_FOUNDRY_ENDPOINT"] = endpoint
-        env["OPENAI_API_VERSION"] = api_version
+        env["AZURE_FOUNDRY_BASE_URL"] = endpoint
+        if api_version:
+            env["OPENAI_API_VERSION"] = api_version
     elif provider == "ollama":
         base_url = _prompt("http://localhost:11434", "Ollama base URL")
     elif provider == "openai-compatible":

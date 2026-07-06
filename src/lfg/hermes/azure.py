@@ -55,6 +55,11 @@ def infer_azure_api_mode(*, endpoint: str, deployment: str) -> str:
     return "chat_completions"
 
 
+def _uses_openai_v1_ga_endpoint(endpoint: str) -> bool:
+    path = urlparse(endpoint).path.rstrip("/").lower()
+    return path.endswith("/openai/v1") or path.endswith("/v1")
+
+
 def resolve_azure_hermes_config(
     *,
     endpoint: str,
@@ -63,8 +68,14 @@ def resolve_azure_hermes_config(
 ) -> AzureHermesConfig:
     base_url = normalize_azure_inference_endpoint(endpoint)
     mode = infer_azure_api_mode(endpoint=base_url, deployment=deployment)
-    version = api_version
-    if version and "api-version=" not in base_url.lower():
+    version = api_version.strip() if api_version else None
+    # Hermes treats /openai/v1 as GA: api-version belongs in config/default_query,
+    # not baked into the base URL (that yields HTTP 400 on many resources).
+    if (
+        version
+        and "api-version=" not in base_url.lower()
+        and not _uses_openai_v1_ga_endpoint(base_url)
+    ):
         parsed = urlparse(base_url)
         query = parse_qs(parsed.query)
         query["api-version"] = [version]

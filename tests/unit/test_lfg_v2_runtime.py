@@ -54,6 +54,13 @@ def test_model_ref_parsing_normalizes_supported_shapes() -> None:
     )
     assert openai_compatible.base_url == "https://api.example.com/v1"
 
+    azure = parse_model_ref(
+        "azure-foundry:gpt-5.4@https://example.openai.azure.com/openai/v1"
+    )
+    assert azure.provider == "azure-foundry"
+    assert azure.model == "gpt-5.4"
+    assert azure.base_url == "https://example.openai.azure.com/openai/v1"
+
     composer = parse_model_ref("composer:grok-composer-2.5-fast")
     assert composer.provider == "composer"
 

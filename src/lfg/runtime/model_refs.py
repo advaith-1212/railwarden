@@ -69,18 +69,29 @@ def parse_model_ref(value: str) -> ModelRef:
 
 
 def _split_model_base_url(provider: str, model_part: str) -> tuple[str, str | None]:
-    if provider not in {"ollama", "openai-compatible"}:
-        return model_part, None
-    model, sep, base_url = model_part.partition("@")
-    if not sep:
-        if provider == "ollama":
+    if provider == "ollama":
+        model, sep, base_url = model_part.partition("@")
+        if not sep:
             return model, "http://localhost:11434"
-        raise ConfigurationError(f"{provider} model refs must include @<base-url>")
-    if not model or not base_url:
-        raise ConfigurationError(f"Invalid {provider} model ref")
-    if not base_url.startswith(("http://", "https://")):
-        raise ConfigurationError(f"{provider} base URL must be absolute")
-    return model, base_url
+        if not model or not base_url:
+            raise ConfigurationError("Invalid ollama model ref")
+        if not base_url.startswith(("http://", "https://")):
+            raise ConfigurationError("ollama base URL must be absolute")
+        return model, base_url
+    if provider in {"openai-compatible", "azure-foundry"}:
+        model, sep, base_url = model_part.partition("@")
+        if not sep:
+            if provider == "openai-compatible":
+                raise ConfigurationError(
+                    f"{provider} model refs must include @<base-url>"
+                )
+            return model_part, None
+        if not model or not base_url:
+            raise ConfigurationError(f"Invalid {provider} model ref")
+        if not base_url.startswith(("http://", "https://")):
+            raise ConfigurationError(f"{provider} base URL must be absolute")
+        return model, base_url
+    return model_part, None
 
 
 def provider_transport(provider: str) -> str:

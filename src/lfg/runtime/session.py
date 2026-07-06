@@ -9,6 +9,7 @@ from typing import Literal
 
 from lfg.config.models import ProjectConfig
 from lfg.errors import ConfigurationError
+from lfg.runtime.launch_setups import load_launch_setups
 from lfg.runtime.model_refs import parse_model_ref, provider_transport
 from lfg.util.atomic import atomic_write_json
 
@@ -191,15 +192,41 @@ def reset_agent_for_launch(
     auth_ref: str | None = None,
     setup_name: str | None = None,
 ) -> AgentInstance:
+    profile = model_profile_from_ref(model_ref, auth_ref=auth_ref)
+    if setup_name:
+        profile = _merge_launch_setup_profile(profile, setup_name)
     return AgentInstance(
         agent_id=agent.agent_id,
         role=agent.role,
-        model_profile=model_profile_from_ref(model_ref, auth_ref=auth_ref),
+        model_profile=profile,
         executor_adapter=agent.executor_adapter,
         setup_name=setup_name,
         state="ready",
         quota_policy=agent.quota_policy,
         active_task=None,
+    )
+
+
+def _merge_launch_setup_profile(
+    profile: ModelProfile, setup_name: str
+) -> ModelProfile:
+    setup = load_launch_setups().get(setup_name)
+    if setup is None:
+        return profile
+    model = setup.model if setup.model else profile.model
+    if "@" in model:
+        model = profile.model
+    return ModelProfile(
+        provider=setup.provider or profile.provider,
+        model=model,
+        transport=provider_transport(setup.provider or profile.provider),
+        auth_ref=profile.auth_ref
+        or (f"env:{setup.auth_env_var}" if setup.auth_env_var else None),
+        base_url=profile.base_url or setup.base_url,
+        reasoning_effort=setup.reasoning_effort or profile.reasoning_effort,
+        context_window=profile.context_window,
+        input_cost_per_million=profile.input_cost_per_million,
+        output_cost_per_million=profile.output_cost_per_million,
     )
 
 
