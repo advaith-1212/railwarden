@@ -25,6 +25,12 @@ def test_plain_prompt_choice_accepts_key(
     assert value == "create-new"
 
 
+def test_questionary_style_initializes() -> None:
+    _questionary, _style = ui._questionary()
+    assert _questionary is not None
+    assert _style is not None
+
+
 def test_plain_prompt_choice_accepts_number(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

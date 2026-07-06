@@ -40,15 +40,15 @@ def _questionary() -> tuple[Any, Any]:
 
     return questionary, Style(
         [
-            ("qmark", "fg:cyan bold"),
-            ("question", "bold fg:white"),
-            ("answer", "fg:green bold"),
-            ("pointer", "fg:yellow bold"),
-            ("highlighted", "fg:black bg:yellow bold"),
-            ("selected", "fg:green"),
-            ("text", "fg:white"),
-            ("instruction", "fg:bright_black italic"),
-            ("separator", "fg:bright_black"),
+            ("qmark", "fg:ansicyan bold"),
+            ("question", "bold fg:ansiwhite"),
+            ("answer", "fg:ansigreen bold"),
+            ("pointer", "fg:ansiyellow bold"),
+            ("highlighted", "fg:ansiblack bg:ansiyellow bold"),
+            ("selected", "fg:ansigreen"),
+            ("text", "fg:ansiwhite"),
+            ("instruction", "fg:ansibrightblack italic"),
+            ("separator", "fg:ansibrightblack"),
         ]
     )
 
