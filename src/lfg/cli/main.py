@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import getpass
 import json
 import os
 import subprocess
@@ -11,6 +10,7 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 from lfg import __version__
+from lfg.cli import ui
 from lfg.config.init import initialize_project
 from lfg.config.loader import load_project_files
 from lfg.engine.controller import controller_tick
@@ -137,28 +137,23 @@ def cmd_setup(args: argparse.Namespace) -> int:
     configured = (root / ".lfg" / "project.yaml").exists() or (
         root / ".lfg" / "factory.yaml"
     ).exists()
-    print("LFG setup")
-    print()
-    print(f"Repository: {root}")
+    created = False
     if not configured:
         if not args.yes:
-            print("This repository is not configured yet.")
-            print(
-                "Run `lfg setup --yes` to create project config and runtime ignore rules."
-            )
-            print("Then run `lfg doctor` to verify Hermes, tmux, providers, and MCP.")
+            ui.banner("LFG setup", subtitle=str(root))
+            ui.warning("This repository is not configured yet.")
+            ui.info("Run [bold]lfg setup --yes[/] to create project config.")
+            ui.info("Then run [bold]lfg doctor[/] before launch.")
             return 0
         result = initialize_project(root, yes=True)
-        print("Created .lfg project configuration.")
+        created = True
         if result.get("needs_commit"):
-            print("Configuration files have been staged. Please commit them before proceeding.")
-    else:
-        print("Project configuration already exists.")
-    print()
-    print("Recommended next steps:")
-    print("  1. lfg doctor")
-    print("  2. lfg launch")
-    print("  3. Tell Hermes what to build in the factory window")
+            ui.warning("Configuration files are ready — commit them before proceeding.")
+    ui.setup_summary_block(
+        repository=str(root),
+        configured=configured or created,
+        created=created,
+    )
     return 0
 
 
@@ -225,50 +220,28 @@ def cmd_start(args: argparse.Namespace) -> int:
     return 0
 
 
-def _prompt(default: str, label: str) -> str:
-    if not sys.stdin.isatty():
-        return default
-    value = input(f"{label} [{default}]: ").strip()
-    return value or default
+def _prompt(default: str, label: str, *, hint: str = "") -> str:
+    return ui.prompt_text(default, label, hint=hint)
 
 
 def _prompt_float(default: float, label: str) -> float:
-    return float(_prompt(str(default), label))
+    return ui.prompt_float(default, label)
 
 
 def _prompt_bool(default: bool, label: str) -> bool:
-    value = _prompt("yes" if default else "no", label).lower()
-    if value in {"1", "true", "yes", "y"}:
-        return True
-    if value in {"0", "false", "no", "n"}:
-        return False
-    raise LfgError(f"Expected yes/no for {label}")
+    return ui.prompt_bool(default, label)
 
 
 def _prompt_optional_int(default: int | None, label: str) -> int | None:
-    value = _prompt("" if default is None else str(default), label)
-    return int(value) if value else None
+    return ui.prompt_optional_int(default, label)
 
 
 def _prompt_choice(default: str, label: str, choices: dict[str, str]) -> str:
-    if not sys.stdin.isatty():
-        return default
-    print(label)
-    for key, description in choices.items():
-        marker = " (default)" if key == default else ""
-        print(f"  {key}{marker}: {description}")
-    value = input(f"Choose [{default}]: ").strip()
-    if not value:
-        return default
-    if value not in choices:
-        raise LfgError(f"Expected one of: {', '.join(choices)}")
-    return value
+    return ui.prompt_choice(default, label, choices)
 
 
-def _prompt_secret(label: str) -> str:
-    if not sys.stdin.isatty():
-        return ""
-    return getpass.getpass(f"{label}: ").strip()
+def _prompt_secret(label: str, *, hint: str = "") -> str:
+    return ui.prompt_secret(label, hint=hint)
 
 
 def _role_provider_key(agent: AgentInstance) -> str:
@@ -310,9 +283,21 @@ def _select_setup_for_agent(
     *,
     default_model_ref: str,
     setups: dict[str, LaunchSetup],
+    step: int | None = None,
+    total: int | None = None,
 ) -> tuple[str, str | None, str | None]:
     if not sys.stdin.isatty():
         return default_model_ref, agent.model_profile.auth_ref, agent.setup_name
+    role = _role_label(agent)
+    if step is not None and total is not None:
+        ui.wizard_step(
+            step,
+            total,
+            role,
+            hint="Choose a saved setup or create a new named provider configuration.",
+        )
+    else:
+        ui.role_card(role, "Configure provider credentials and model for this role.")
     choices = _build_setup_choices(agent, setups)
     default_choice = (
         agent.setup_name
@@ -377,10 +362,14 @@ def _create_named_setup(agent: AgentInstance) -> CreatedSetup:
         auth_env_var = default_auth_env_var(provider, name)
         endpoint = _prompt(
             "",
-            "Azure inference endpoint URL (not Foundry project URL)",
+            "Azure inference endpoint URL",
+            hint="Use https://<resource>.openai.azure.com/openai/v1 — not a Foundry project URL.",
         )
         endpoint = validate_azure_inference_endpoint(endpoint)
-        api_key = _prompt_secret("Azure API key")
+        api_key = _prompt_secret(
+            "Azure API key",
+            hint="Stored in ~/.lfg/launch-setups.d/ and .lfg-runtime/hermes/.../secrets.env",
+        )
         api_version = _prompt("2024-10-21", "Azure OpenAI API version")
         base_url = endpoint
         env[auth_env_var] = api_key
@@ -440,51 +429,23 @@ def _split_reasoning(model: str) -> tuple[str, str | None]:
     return name, reasoning or None
 
 
-def _section(title: str) -> None:
-    print(title)
-    print("-" * len(title))
+def _section(title: str, *, hint: str = "") -> None:
+    ui.section(title, hint=hint)
 
 
 def _table(headers: list[str], rows: list[list[object]]) -> None:
-    if not rows:
-        print("  none")
-        return
-    text_rows = [[_cell(item) for item in row] for row in rows]
-    widths = [
-        max(len(headers[index]), *(len(row[index]) for row in text_rows))
-        for index in range(len(headers))
-    ]
-    print("  " + "  ".join(headers[i].ljust(widths[i]) for i in range(len(headers))))
-    print("  " + "  ".join("-" * width for width in widths))
-    for row in text_rows:
-        print("  " + "  ".join(row[i].ljust(widths[i]) for i in range(len(headers))))
-
-
-def _cell(value: object) -> str:
-    if value is None:
-        return "-"
-    if isinstance(value, float):
-        return f"{value:g}"
-    return str(value)
+    ui.print_table(headers, rows)
 
 
 def _status(value: object) -> str:
-    text = str(value)
-    if text in {"healthy", "available", "ok", "reachable"}:
-        return f"OK {text}"
-    if text in {"missing", "failed", "unavailable", "unreachable"}:
-        return f"FAIL {text}"
-    if text in {"skipped", "external-or-not-required", "external"}:
-        return f"INFO {text}"
-    return text
+    return ui.status_cell(value)
 
 
 def _print_doctor(payload: dict[str, Any]) -> None:
-    _section("LFG doctor")
-    print(
-        "Checks local tools, providers, credentials, Hermes profile, MCP, and git ignore rules."
+    ui.banner(
+        "LFG doctor",
+        subtitle="Tools, providers, credentials, Hermes, MCP, and git ignore rules.",
     )
-    print()
 
     tools = payload.get("tools", {})
     if isinstance(tools, dict):
@@ -774,22 +735,53 @@ def _agent_with_model_and_policy(
     )
 
 
+def _launch_wizard_total(profile: SessionProfile, *, advanced: bool) -> int:
+    optional_roles = int(profile.reviewer is not None) + int(
+        profile.validator is not None
+    )
+    total = 4 + len(profile.workers) + optional_roles + 2
+    if advanced:
+        total += 4
+    return total
+
+
 def _build_launch_profile(
     profile: SessionProfile, *, name: str | None, preset_name: str | None = None
 ) -> SessionProfile:
-    profile_name = name or _prompt(profile.name, "Session profile")
+    ui.banner(
+        "LFG launch wizard",
+        subtitle="Configure Hermes, workers, and factory runtime. Use ↑↓ to select options.",
+    )
     setups = load_launch_setups()
+    advanced = preset_name == "advanced"
+    total_steps = _launch_wizard_total(profile, advanced=advanced)
+    step = 1
+    if name is None:
+        ui.wizard_step(step, total_steps, "Session", hint="Name for this factory run.")
+        profile_name = _prompt(profile.name, "Session profile name")
+        step += 1
+    else:
+        profile_name = name
     if preset_name is None:
+        ui.wizard_step(
+            step,
+            total_steps,
+            "Launch preset",
+            hint="Guided is recommended for first-time setup.",
+        )
         preset_name = _prompt_choice(
             "guided",
-            "Launch preset",
+            "Choose a launch preset",
             {key: value["description"] for key, value in LAUNCH_PRESETS.items()},
         )
+        step += 1
     elif preset_name not in LAUNCH_PRESETS:
         raise LfgError(f"Expected one of: {', '.join(LAUNCH_PRESETS)}")
     preset = LAUNCH_PRESETS[preset_name]
     advanced = preset_name == "advanced"
     guided = preset_name != "advanced"
+    if advanced:
+        total_steps = _launch_wizard_total(profile, advanced=True)
 
     orchestrator_ref = (
         preset["orchestrator"] or profile.orchestrator.model_profile.model_ref
@@ -832,20 +824,30 @@ def _build_launch_profile(
             profile.orchestrator,
             default_model_ref=orchestrator_ref,
             setups=setups,
+            step=step,
+            total=total_steps,
         )
+        step += 1
         architect_ref, architect_auth_ref, architect_setup_name = _select_setup_for_agent(
             profile.architect,
             default_model_ref=architect_ref,
             setups=setups,
+            step=step,
+            total=total_steps,
         )
-        selected_workers = [
-            _select_setup_for_agent(
-                worker,
-                default_model_ref=worker_refs[index],
-                setups=setups,
+        step += 1
+        selected_workers = []
+        for index, worker in enumerate(profile.workers):
+            selected_workers.append(
+                _select_setup_for_agent(
+                    worker,
+                    default_model_ref=worker_refs[index],
+                    setups=setups,
+                    step=step,
+                    total=total_steps,
+                )
             )
-            for index, worker in enumerate(profile.workers)
-        ]
+            step += 1
         worker_refs = [item[0] for item in selected_workers]
         worker_auth_refs = [item[1] for item in selected_workers]
         worker_setup_names = [item[2] for item in selected_workers]
@@ -854,7 +856,10 @@ def _build_launch_profile(
                 profile.reviewer,
                 default_model_ref=reviewer_ref,
                 setups=setups,
+                step=step,
+                total=total_steps,
             )
+            step += 1
         if profile.validator is not None and validator_ref is not None:
             (
                 validator_ref,
@@ -864,7 +869,10 @@ def _build_launch_profile(
                 profile.validator,
                 default_model_ref=validator_ref,
                 setups=setups,
+                step=step,
+                total=total_steps,
             )
+            step += 1
     elif advanced:
         orchestrator_ref = _prompt(orchestrator_ref, "Hermes orchestrator model ref")
         architect_ref = _prompt(architect_ref, "Architect model ref")
@@ -883,10 +891,17 @@ def _build_launch_profile(
             else None
         )
 
+    ui.wizard_step(
+        step,
+        total_steps,
+        "Session labels",
+        hint="Shown in pane titles and quota reports.",
+    )
     budget_label = _prompt(
         profile.budget_label,
-        "Budget/session label (shown in panes and quota reports)",
+        "Budget/session label",
     )
+    step += 1
     fallback_policy = _prompt_choice(
         profile.fallback_policy
         if profile.fallback_policy in FALLBACK_POLICIES
@@ -894,6 +909,7 @@ def _build_launch_profile(
         "Fallback/swap policy",
         FALLBACK_POLICIES,
     )
+    step += 1
     default_policy = profile.orchestrator.quota_policy
     if advanced:
         quota_policy = QuotaPolicy(
@@ -996,21 +1012,17 @@ def cmd_launch(args: argparse.Namespace) -> int:
         profile=profile,
         hermes_profile=hermes_profile,
     )
-    print("LFG factory launched")
-    print()
-    print(f"Tmux session: {name}")
-    print(
-        f"Session profile: {files.project.runtime_directory / 'state' / 'session-profile.json'}"
+    attach_hint = f"Attach with: [bold]lfg attach[/] or [bold]tmux attach -t {name}[/]"
+    if not args.no_attach:
+        attach_hint = ""
+    ui.launch_summary(
+        session=name,
+        profile_path=str(
+            files.project.runtime_directory / "state" / "session-profile.json"
+        ),
+        hermes_home=str(hermes_profile.home),
+        attach_hint=attach_hint,
     )
-    print(f"Hermes home: {hermes_profile.home}")
-    print(f"Hermes command: {' '.join(hermes_profile.command)}")
-    print()
-    print("Windows:")
-    print("  factory       Hermes, controller, workers, integration")
-    print("  observability DAG, workflow, git, quotas, events, logs")
-    if args.no_attach:
-        print()
-        print(f"Attach with: tmux attach -t {name}")
     return 0
 
 
