@@ -14,6 +14,7 @@ from lfg.config.models import (
 )
 from lfg.errors import ConfigurationError
 from lfg.git import discover_repo
+from lfg.validation.commands import parse_validation_argv
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -140,6 +141,7 @@ def load_project_config(repository_root: Path) -> ProjectConfig:
         execution_preserve_partial_work_on_handoff=bool(
             execution.get("preserve_partial_work_on_handoff", True)
         ),
+        supervision_mode=str(execution.get("supervision_mode", "controller")),
         monitoring_git_graph=bool(monitoring.get("git_graph", True)),
     )
 
@@ -228,14 +230,11 @@ def _load_validation_commands(
         else:
             cwd = raw.get("cwd", ".")
             argv = raw.get("argv", raw.get("command", []))
-        if isinstance(argv, str):
-            if "&;" in argv or "& ;" in argv:
-                raise ConfigurationError(
-                    f"{source}[{index}] uses shell background syntax; "
-                    "use structured argv or an explicit smoke-test command"
-                )
-            argv = argv.split()
-        if not isinstance(argv, list) or not argv:
+        if isinstance(argv, (str, list)):
+            argv = list(parse_validation_argv(argv, source=f"{source}[{index}]"))
+        else:
+            argv = list(parse_validation_argv(argv, source=f"{source}[{index}]"))
+        if not argv:
             raise ConfigurationError(f"{source}[{index}] requires argv list")
         outputs = raw.get("generated_outputs", [])
         if not isinstance(outputs, list):

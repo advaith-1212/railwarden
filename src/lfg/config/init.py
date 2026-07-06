@@ -117,7 +117,7 @@ def ensure_gitignore(repository_root: Path, *, yes: bool) -> str:
     return proposal
 
 
-def initialize_project(repository_root: Path, *, yes: bool) -> dict[str, str]:
+def initialize_project(repository_root: Path, *, yes: bool) -> dict[str, object]:
     run_git(repository_root, "rev-parse", "--is-inside-work-tree")
     config_dir = repository_root / ".lfg"
     prompts_dir = config_dir / "prompts"

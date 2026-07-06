@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import shlex
 import subprocess
 from dataclasses import dataclass
+from typing import Any
 
 from lfg.config.models import ProjectConfig
 from lfg.hermes.profile import HermesRuntimeProfile
+from lfg.providers.adapters import default_adapters
 from lfg.runtime.session import AgentInstance, SessionProfile
 from lfg.util.atomic import atomic_write_json
+from lfg.workers.pane_runtime import idle_pane_command
 
 
 def normalized_project_name(name: str) -> str:
@@ -52,13 +56,13 @@ def launch_layout(
     source_env = _source_env_command(hermes_profile.env_path)
     hermes_command = " ".join(shlex.quote(item) for item in hermes_profile.command)
     observability_loop = _portable_status_loop("lfg observability")
+    controller_command = (
+        f"{source_env} && cd {root} && mkdir -p {log_dir} && "
+        f"PYTHONUNBUFFERED=1 lfg controller 2>&1 | tee -a "
+        f"{shlex.quote(str(config.runtime_directory / 'logs' / 'controller.log'))}"
+    )
+    adapters = default_adapters()
     specs = [
-        PaneSpec(
-            "controller",
-            "Controller | role=factory exec=lfg provider=local model=deterministic | healthy",
-            f"{source_env} && cd {root} && mkdir -p {log_dir} && PYTHONUNBUFFERED=1 lfg controller 2>&1 | tee -a {shlex.quote(str(config.runtime_directory / 'logs' / 'controller.log'))}",
-            "factory",
-        ),
         PaneSpec(
             "hermes",
             _pane_title(profile.orchestrator, label="Hermes", budget=profile.budget_label),
@@ -66,16 +70,10 @@ def launch_layout(
             "factory",
         ),
         PaneSpec(
-            "hermes-supervisor",
-            "Hermes Supervisor | role=orchestrator exec=lfg provider=local model=state | healthy",
-            f"{source_env} && cd {root} && PYTHONUNBUFFERED=1 lfg hermes supervisor 2>&1 | tee -a {shlex.quote(str(config.runtime_directory / 'logs' / 'hermes-supervisor.log'))}",
-            "factory",
-        ),
-        PaneSpec(
-            "integration",
-            "Integration | role=integrator exec=lfg provider=git model=deterministic | healthy",
-            f"{source_env} && cd {root} && {observability_loop}",
-            "factory",
+            "controller",
+            "Controller | role=factory exec=lfg provider=local model=deterministic | healthy",
+            controller_command,
+            "observability",
         ),
         PaneSpec(
             "observability",
@@ -84,20 +82,56 @@ def launch_layout(
             "observability",
         ),
     ]
-    for agent in profile.workers:
+    for agent in profile.workers[:5]:
+        adapter = adapters.get(agent.executor_adapter)
+        if adapter is None:
+            idle = (
+                f"{source_env} && cd {root} && "
+                f"echo {shlex.quote(f'{agent.agent_id} ready')} && exec ${{SHELL:-/bin/sh}}"
+            )
+        else:
+            idle = f"{source_env} && {idle_pane_command(config, agent, adapter)}"
         specs.append(
             PaneSpec(
                 agent.agent_id,
                 _pane_title(agent, label=agent.agent_id, budget=profile.budget_label),
-                (
-                    f"{source_env} && cd {root} && printf %s\\\\n "
-                    f"{shlex.quote(f'LFG worker pane ready: {agent.agent_id} ({agent.executor_adapter})')} "
-                    "&& exec ${SHELL:-/bin/sh}"
-                ),
+                idle,
                 "factory",
             )
         )
     return specs
+
+
+def send_worker_message(
+    config: ProjectConfig,
+    *,
+    agent_id: str | None = None,
+    task_id: str | None = None,
+    message: str,
+) -> dict[str, Any]:
+    state_path = config.runtime_directory / "state" / "tmux-session.json"
+    if not state_path.exists():
+        raise RuntimeError("No tmux session metadata found")
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    panes = payload.get("panes", {})
+    if not isinstance(panes, dict):
+        raise RuntimeError("Invalid tmux session metadata")
+    pane_key = agent_id
+    if pane_key is None and task_id:
+        tasks_path = config.runtime_directory / "state" / "tasks.json"
+        if tasks_path.exists():
+            tasks_payload = json.loads(tasks_path.read_text(encoding="utf-8"))
+            for task in tasks_payload.get("tasks", []):
+                if str(task.get("id")) == task_id:
+                    pane_key = str(task.get("agent_id") or task.get("provider") or "")
+                    break
+    if not pane_key:
+        raise RuntimeError("agent_id or task_id is required")
+    pane_id = panes.get(pane_key)
+    if pane_id is None:
+        raise RuntimeError(f"No pane registered for worker: {pane_key}")
+    tmux(["send-keys", "-t", str(pane_id), message, "C-m"])
+    return {"status": "sent", "agent_id": pane_key, "pane": str(pane_id)}
 
 
 def _pane_title(agent: AgentInstance, *, label: str, budget: str) -> str:
@@ -275,7 +309,13 @@ def _create_v2_session(
     root = str(config.repository_root)
     config.runtime_directory.mkdir(parents=True, exist_ok=True)
     (config.runtime_directory / "logs").mkdir(parents=True, exist_ok=True)
-    factory = tmux(
+    factory_specs = [spec for spec in specs if spec.window == "factory"]
+    hermes_spec = next((spec for spec in factory_specs if spec.key == "hermes"), None)
+    worker_specs = [spec for spec in factory_specs if spec.key != "hermes"]
+    if hermes_spec is None:
+        raise RuntimeError("Factory layout requires a Hermes pane")
+
+    hermes_pane = tmux(
         [
             "new-session",
             "-d",
@@ -290,23 +330,42 @@ def _create_v2_session(
             root,
         ]
     ).stdout.strip()
-    pane_ids = {"controller": factory}
-    factory_specs = [spec for spec in specs if spec.window == "factory"]
-    for index, spec in enumerate(factory_specs[1:], start=1):
-        target = factory if index == 1 else pane_ids[factory_specs[index - 1].key]
-        split_args = [
+    pane_ids = {"hermes": hermes_pane}
+    worker_area = tmux(
+        [
             "split-window",
-            "-v" if index % 2 else "-h",
+            "-h",
+            "-p",
+            "50",
             "-P",
             "-F",
             "#{pane_id}",
             "-t",
-            target,
+            hermes_pane,
             "-c",
             root,
         ]
-        pane_ids[spec.key] = tmux(split_args).stdout.strip()
-    observability_window = tmux(
+    ).stdout.strip()
+    if worker_specs:
+        pane_ids[worker_specs[0].key] = worker_area
+        for index in range(1, len(worker_specs)):
+            target = worker_specs[index - 1].key
+            pane_ids[worker_specs[index].key] = tmux(
+                [
+                    "split-window",
+                    "-v",
+                    "-P",
+                    "-F",
+                    "#{pane_id}",
+                    "-t",
+                    pane_ids[target],
+                    "-c",
+                    root,
+                ]
+            ).stdout.strip()
+
+    observability_specs = [spec for spec in specs if spec.window == "observability"]
+    observability_root = tmux(
         [
             "new-window",
             "-P",
@@ -320,14 +379,28 @@ def _create_v2_session(
             root,
         ]
     ).stdout.strip()
-    for spec in specs:
-        if spec.window == "observability":
-            pane_ids[spec.key] = observability_window
-            break
+    if observability_specs:
+        pane_ids[observability_specs[0].key] = observability_root
+        for index in range(1, len(observability_specs)):
+            pane_ids[observability_specs[index].key] = tmux(
+                [
+                    "split-window",
+                    "-v",
+                    "-P",
+                    "-F",
+                    "#{pane_id}",
+                    "-t",
+                    pane_ids[observability_specs[index - 1].key],
+                    "-c",
+                    root,
+                ]
+            ).stdout.strip()
+
     for spec in specs:
         pane = pane_ids[spec.key]
         tmux(["select-pane", "-t", pane, "-T", spec.title])
         tmux(["send-keys", "-t", pane, spec.command, "C-m"])
+
     tmux(["set-option", "-t", name, "mouse", "on"])
     tmux(["set-option", "-t", name, "remain-on-exit", "on"])
     tmux(["set-option", "-t", name, "pane-border-status", "top"])
@@ -339,10 +412,12 @@ def _create_v2_session(
             "windows": ["factory", "observability"],
             "panes": pane_ids,
             "layout": [spec.__dict__ for spec in specs],
+            "factory_layout": "hermes_left_workers_right",
         },
     )
     if attach:
         tmux(["select-window", "-t", f"{name}:factory"])
+        tmux(["select-pane", "-t", hermes_pane])
         subprocess.run(["tmux", "attach-session", "-t", name], check=False)
     return name
 
@@ -368,6 +443,7 @@ def stop_session(config: ProjectConfig) -> bool:
     if not has_session(name):
         return False
     import json
+
     from lfg.processes.supervisor import terminate_process_group
     processes_dir = config.runtime_directory / "processes"
     if processes_dir.exists():

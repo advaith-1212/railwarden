@@ -8,6 +8,7 @@ from pathlib import Path
 
 import anyio
 import pytest
+import yaml
 
 import lfg.cli.main as cli_main
 from lfg.cli.main import main
@@ -35,6 +36,7 @@ from lfg.runtime.skills import create_runtime_skill
 from lfg.runtime.tasks import ensure_task, load_tasks, save_tasks
 from lfg.runtime.typed_agents import create_pydanticai_agent
 from lfg.tmux.session import launch_layout
+from tests.conftest import initialize_populated_project
 
 
 def test_model_ref_parsing_normalizes_supported_shapes() -> None:
@@ -215,7 +217,10 @@ def test_hermes_profile_generation_is_runtime_only(git_repo: Path) -> None:
 
     assert files.project.runtime_directory in hermes.config_path.parents
     assert hermes.env_path.stat().st_mode & 0o777 == 0o600
-    assert "LFG is authoritative" in hermes.soul_path.read_text(encoding="utf-8")
+    assert "LFG is authoritative" in hermes.instructions_path.read_text(
+        encoding="utf-8"
+    )
+    assert "Hermes Soul" in hermes.soul_path.read_text(encoding="utf-8")
     assert "name: lfg-factory" in hermes.skill_path.read_text(encoding="utf-8")
     config = hermes.config_path.read_text(encoding="utf-8")
     assert "mcp_servers:" in config
@@ -274,6 +279,7 @@ def test_mcp_tool_schemas_cover_required_tools() -> None:
         "lfg.plan.create",
         "lfg.plan.approve",
         "lfg.plan.show",
+        "lfg.plan.status",
         "lfg.plan.reject",
         "lfg.contracts.freeze",
         "lfg.task.list",
@@ -335,9 +341,10 @@ def test_tmux_launch_layout_has_factory_and_observability(git_repo: Path) -> Non
     )
     assert any("role=coder exec=codex provider=codex" in spec.title for spec in specs)
     assert any("lfg observability" in spec.command for spec in specs)
-    assert any("LFG worker pane ready: codex-1" in spec.command for spec in specs)
-    assert all("set -a;" in spec.command for spec in specs)
+    assert any("exec codex" in spec.command for spec in specs)
+    assert all("set -a;" in spec.command for spec in specs if spec.window == "factory")
     assert not any("lfg worker codex" in spec.command for spec in specs)
+    assert any(spec.window == "observability" and "lfg controller" in spec.command for spec in specs)
     assert not any("watch -n 5 lfg observability" in spec.command for spec in specs)
 
 
@@ -426,7 +433,7 @@ def test_guided_launch_creates_named_setup_and_runtime_env(
                     "azure-foundry",
                     "gpt-5.5",
                     "azure-prod",
-                    "https://example.services.ai.azure.com/api/projects/demo",
+                    "https://example.openai.azure.com/openai/v1",
                     "",
                     "",
                     "",
@@ -445,7 +452,8 @@ def test_guided_launch_creates_named_setup_and_runtime_env(
 
     profile = load_session_profile(load_project_files(git_repo).project)
     assert profile.orchestrator.setup_name == "azure-prod"
-    assert profile.orchestrator.model_profile.model_ref == "azure-foundry:gpt-5.5"
+    assert profile.orchestrator.model_profile.model_ref.startswith("azure-foundry:gpt-5.5")
+    assert "openai.azure.com" in profile.orchestrator.model_profile.model_ref
     assert profile.orchestrator.model_profile.auth_ref is not None
 
     setups = load_launch_setups()
@@ -457,6 +465,8 @@ def test_guided_launch_creates_named_setup_and_runtime_env(
     assert "AZURE_OPENAI_ENDPOINT" in env_text
     assert "azure-secret" in env_text
     assert "AZURE_FOUNDRY_API_KEY" in env_text
+    config = yaml.safe_load(hermes.config_path.read_text(encoding="utf-8"))
+    assert config["model"]["provider"] == "azure-foundry"
 
 
 def test_doctor_report_checks_credentials_endpoints_mcp_and_ignore(
@@ -514,7 +524,7 @@ def test_doctor_report_checks_credentials_endpoints_mcp_and_ignore(
 
 
 def test_low_quota_prevents_new_task_launch(git_repo: Path) -> None:
-    initialize_project(git_repo, yes=True)
+    initialize_populated_project(git_repo)
     _write_package(git_repo)
     subprocess.run(
         ["git", "-C", str(git_repo), "checkout", "integration/lfg"],
@@ -598,7 +608,7 @@ def test_model_profile_uses_pydanticai_compatible_ref() -> None:
 
 
 def test_worker_prompt_includes_skills_and_mcp_routing(git_repo: Path) -> None:
-    initialize_project(git_repo, yes=True)
+    initialize_populated_project(git_repo)
     _write_package(git_repo)
     subprocess.run(
         ["git", "-C", str(git_repo), "checkout", "integration/lfg"],
@@ -628,7 +638,7 @@ def test_worker_prompt_includes_skills_and_mcp_routing(git_repo: Path) -> None:
 def test_agent_swap_creates_handoff_and_relaunches_with_override(
     git_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    initialize_project(git_repo, yes=True)
+    initialize_populated_project(git_repo)
     _write_package(git_repo)
     subprocess.run(
         ["git", "-C", str(git_repo), "checkout", "integration/lfg"],
@@ -674,7 +684,7 @@ def test_agent_swap_creates_handoff_and_relaunches_with_override(
 
 
 def test_crash_resume_checkpoints_dirty_worktree_and_reassigns(git_repo: Path) -> None:
-    initialize_project(git_repo, yes=True)
+    initialize_populated_project(git_repo)
     _write_package(git_repo)
     subprocess.run(
         ["git", "-C", str(git_repo), "checkout", "integration/lfg"],
@@ -729,6 +739,9 @@ work_packages:
     name: First package
     objective: Do work
     owned_paths: ["src"]
+    context_refs:
+      - context/ARCHITECTURE.md
+      - context/TEST_STRATEGY.md
     preferred_providers: ["codex"]
 """,
         encoding="utf-8",

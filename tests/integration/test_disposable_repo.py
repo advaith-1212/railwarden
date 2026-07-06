@@ -42,6 +42,12 @@ def test_end_to_end_disposable_repo(git_repo: Path) -> None:
     (git_repo / ".lfg" / "work_packages.yaml").write_text(
         yaml.safe_dump(packages), encoding="utf-8"
     )
+    subprocess.run(["git", "-C", str(git_repo), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(git_repo), "commit", "-m", "configure integration test"],
+        check=True,
+        capture_output=True,
+    )
     files = load_project_files(git_repo)
     pkg = files.packages["WP-1"]
     result = ensure_worktree(

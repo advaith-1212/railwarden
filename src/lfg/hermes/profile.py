@@ -8,6 +8,7 @@ from pathlib import Path
 import yaml
 
 from lfg.config.models import ProjectConfig
+from lfg.hermes.azure import resolve_azure_hermes_config
 from lfg.runtime.launch_setups import load_setup_env, write_runtime_env
 from lfg.runtime.secrets import ensure_runtime_secrets_file
 from lfg.runtime.session import SessionProfile
@@ -66,8 +67,9 @@ def generate_hermes_profile(
     for directory in skill_dirs:
         Path(directory).mkdir(parents=True, exist_ok=True)
     instructions = _instructions(config, session)
+    soul = _soul(config, session)
     atomic_write_text(instructions_path, instructions)
-    atomic_write_text(soul_path, instructions)
+    atomic_write_text(soul_path, soul)
     atomic_write_text(skill_path, _skill(instructions))
     atomic_write_text(
         mcp_config_path,
@@ -87,14 +89,9 @@ def generate_hermes_profile(
         + "\n",
     )
     command = _lfg_mcp_command()
+    model_payload = _orchestrator_model_payload(session, runtime_env)
     payload = {
-        "model": {
-            "provider": _hermes_provider(session.orchestrator.model_profile.provider),
-            "default": session.orchestrator.model_profile.model,
-            "name": session.orchestrator.model_profile.model,
-            "reasoning_effort": session.orchestrator.model_profile.reasoning_effort,
-            "base_url": _orchestrator_base_url(session, runtime_env),
-        },
+        "model": model_payload,
         "providers": {},
         "toolsets": ["hermes-cli"],
         "terminal": {"backend": "local"},
@@ -142,9 +139,38 @@ def _hermes_provider(provider: str) -> str:
         "gemini": "google",
         "ollama": "ollama-launch",
         "openai-compatible": "openai",
-        "azure-foundry": "openai",
+        "azure-foundry": "azure-foundry",
     }
     return mapping.get(provider, provider)
+
+
+def _orchestrator_model_payload(
+    session: SessionProfile, runtime_env: dict[str, str]
+) -> dict[str, object]:
+    profile = session.orchestrator.model_profile
+    provider = _hermes_provider(profile.provider)
+    payload: dict[str, object] = {
+        "provider": provider,
+        "default": profile.model,
+        "name": profile.model,
+        "reasoning_effort": profile.reasoning_effort,
+    }
+    base_url = _orchestrator_base_url(session, runtime_env)
+    api_version = runtime_env.get("OPENAI_API_VERSION")
+    if provider == "azure-foundry" and base_url:
+        azure = resolve_azure_hermes_config(
+            endpoint=base_url,
+            deployment=profile.model,
+            api_version=api_version,
+        )
+        payload["provider"] = azure.provider
+        payload["base_url"] = azure.base_url
+        payload["api_mode"] = azure.api_mode
+        if azure.api_version:
+            payload["api_version"] = azure.api_version
+    elif base_url:
+        payload["base_url"] = base_url
+    return payload
 
 
 def _inherit_existing_auth(home: Path) -> None:
@@ -226,6 +252,32 @@ Do not write raw secrets to tracked files, logs, fixtures, snapshots, or errors.
 
 Workers:
 {workers or "- none"}
+
+Worker steering:
+- Route implementation guidance to workers with `lfg.worker.message`.
+- Use `agent_id` (for example `codex-1`) or `task_id` to target the live pane.
+- Never type into worker panes directly; Hermes is the only human-facing console.
+"""
+
+
+def _soul(config: ProjectConfig, session: SessionProfile) -> str:
+    return f"""# Hermes Soul
+
+You are Hermes, the accountable orchestrator for LFG's agent factory.
+
+Personality:
+- Pragmatic, state-driven, failure-aware, and decisive.
+- No cheerleading and no speculative success claims.
+- Report only observed runtime facts and tool results.
+
+Boundaries:
+- LFG owns durable state, scheduling, validation, and integration.
+- You own goals, planning, context, assignment, recovery choices, and status.
+- Never edit repository files or run implementation commands from this pane.
+- Steer workers only through `lfg.worker.message`.
+
+Repository: {config.repository_root}
+Session: {session.name}
 """
 
 

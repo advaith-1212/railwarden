@@ -5,6 +5,10 @@ from pathlib import Path
 
 import pytest
 
+from tests.helpers import initialize_populated_project, populate_test_context
+
+__all__ = ["initialize_populated_project", "populate_test_context"]
+
 
 def git(repo: Path, *args: str) -> str:
     result = subprocess.run(

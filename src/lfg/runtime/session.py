@@ -127,7 +127,7 @@ def default_auth_ref(provider: str) -> str | None:
         "openai": "env:OPENAI_API_KEY",
         "anthropic": "env:ANTHROPIC_API_KEY",
         "gemini": "env:GEMINI_API_KEY",
-        "azure-foundry": "env:AZURE_OPENAI_API_KEY",
+        "azure-foundry": "env:AZURE_FOUNDRY_API_KEY",
         "openai-compatible": "env:OPENAI_API_KEY",
     }
     return mapping.get(provider)

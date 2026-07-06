@@ -76,12 +76,26 @@ FAILURE_PATTERNS: dict[str, tuple[str, ...]] = {
 
 def classify_failure(text: str) -> tuple[str, bool, bool, str | None]:
     normalized = text.lower()
+    for kind, patterns in FAILURE_PATTERNS.items():
+        if kind in {"quota_exhausted", "rate_limited"}:
+            for pattern in patterns:
+                if pattern in normalized:
+                    return (
+                        kind,
+                        kind in TRANSIENT_FAILURE_KINDS,
+                        kind in HUMAN_FAILURE_KINDS,
+                        pattern,
+                    )
     if (
         ("result json" in normalized or "output-last-message" in normalized)
         and ("sandbox" in normalized or ".lfg-runtime/results" in normalized)
+        and "usage limit" not in normalized
+        and "quota" not in normalized
     ):
         return "result_path_unwritable", False, False, "result json sandbox"
     for kind, patterns in FAILURE_PATTERNS.items():
+        if kind in {"quota_exhausted", "rate_limited"}:
+            continue
         for pattern in patterns:
             if pattern in normalized:
                 return (

@@ -24,7 +24,7 @@ from lfg.providers.health import (
 )
 from lfg.provisioning.worktrees import ensure_worktree
 from lfg.runtime.checkpoints import CheckpointResult, create_checkpoint_commit
-from lfg.runtime.context import context_status
+from lfg.runtime.context import context_status, resolve_context_refs
 from lfg.runtime.decisions import emit_decision_required, record_decision
 from lfg.runtime.events import append_event
 from lfg.runtime.handoff import create_handoff_packet
@@ -49,6 +49,7 @@ from lfg.scheduler.classifier import classify_packages, package_branch, package_
 from lfg.validation.package import run_package_validation
 from lfg.validation.review import requires_human_merge_approval, run_package_review
 from lfg.validation.worker_result import load_worker_result, validate_completed_package
+from lfg.workers.completion import complete_worker_task
 
 TERMINAL_STATES = {"merged", "blocked", "failed"}
 ACTIVE_STATES = {"assigned", "running", "validating", "reviewing", "integrating"}
@@ -148,6 +149,9 @@ Validation commands:
 
 Context refs:
 {chr(10).join(f"- {item}" for item in package.context_refs) or "- none"}
+
+Context content:
+{resolve_context_refs(config.repository_root, package.context_refs) or "No context content resolved."}
 
 Context rules:
 - Read every listed context ref before editing.
@@ -271,7 +275,7 @@ def _package_for_task(files: ProjectFiles, task: dict[str, Any]) -> WorkPackage 
     return files.packages.get(package_id)
 
 
-def _handoff_or_block(
+def handoff_or_block(
     files: ProjectFiles,
     task: dict[str, Any],
     package: WorkPackage,
@@ -412,6 +416,8 @@ def _tmux_process_stale(process: dict[str, Any]) -> bool:
 
 def _default_supervisor_decisions(files: ProjectFiles) -> None:
     config = files.project
+    if config.supervision_mode == "hermes":
+        return
     for task in load_tasks(config.runtime_directory):
         if str(task.get("status")) != "decision_required":
             continue
@@ -431,13 +437,13 @@ def _default_supervisor_decisions(files: ProjectFiles) -> None:
             result = transition_task(
                 config.runtime_directory,
                 task,
-                "running",
+                "validating",
                 {"runtime_result_path": normalized["path"]},
             )
             chosen = "normalize_result"
             rationale = "clean committed work can be normalized by LFG"
         elif "handoff_provider" in allowed and provider:
-            result = _handoff_or_block(
+            result = handoff_or_block(
                 files,
                 task,
                 package,
@@ -484,6 +490,16 @@ def reconcile_processes(files: ProjectFiles) -> list[dict[str, Any]]:
             continue
         process_path = _process_path(config, str(task["id"]))
         if not process_path.exists():
+            if status in ACTIVE_STATES:
+                transition_task(
+                    config.runtime_directory,
+                    task,
+                    "decision_required",
+                    {
+                        "failure_kind": "missing_process_record",
+                        "reason": "active task has no process metadata",
+                    },
+                )
             continue
         process = json.loads(process_path.read_text(encoding="utf-8"))
         if not isinstance(process, dict):
@@ -549,7 +565,7 @@ def reconcile_processes(files: ProjectFiles) -> list[dict[str, Any]]:
                         validation_evidence=validation,
                     )
                 except ValidationError as exc:
-                    _handoff_or_block(
+                    handoff_or_block(
                         files,
                         task,
                         package,
@@ -568,7 +584,7 @@ def reconcile_processes(files: ProjectFiles) -> list[dict[str, Any]]:
                         if isinstance(findings, list)
                         else str(findings)
                     )
-                    _handoff_or_block(
+                    handoff_or_block(
                         files,
                         task,
                         package,
@@ -638,27 +654,57 @@ def reconcile_processes(files: ProjectFiles) -> list[dict[str, Any]]:
                 },
             )
             continue
-        if _has_clean_task_commit(config, workspace, branch):
-            _require_decision(
-                files,
-                task,
-                failure_kind="missing_worker_result_with_commit",
-                facts={
-                    "provider": provider,
-                    "commit_exists": True,
-                    "result_json_exists": False,
-                    "worktree_dirty": False,
-                    "workspace": str(workspace),
-                    "branch": branch,
-                },
-            )
-            continue
         log_path = Path(str(process.get("log_path", "")))
         failure_text = (
             log_path.read_text(encoding="utf-8", errors="replace")
             if log_path.exists()
             else ""
         )
+        if _has_clean_task_commit(config, workspace, branch):
+            if config.supervision_mode == "hermes":
+                _require_decision(
+                    files,
+                    task,
+                    failure_kind="missing_worker_result_with_commit",
+                    facts={
+                        "provider": provider,
+                        "commit_exists": True,
+                        "result_json_exists": False,
+                        "worktree_dirty": False,
+                        "workspace": str(workspace),
+                        "branch": branch,
+                    },
+                )
+                continue
+            outcome = complete_worker_task(
+                config,
+                task=task,
+                package=package,
+                workspace=workspace,
+                branch=branch,
+                provider=provider,
+                log_text=failure_text,
+                result_path=result_path,
+                runtime_result_path=runtime_path,
+            )
+            if outcome["status"] == "validated":
+                runtime_path = Path(str(outcome["result_path"]))
+                task["runtime_result_path"] = str(runtime_path)
+            else:
+                _require_decision(
+                    files,
+                    task,
+                    failure_kind=str(outcome.get("failure_kind", "adapter_failure")),
+                    facts={
+                        "provider": provider,
+                        "commit_exists": bool(outcome.get("commit_exists")),
+                        "result_json_exists": bool(outcome.get("result_json_exists")),
+                        "workspace": str(outcome.get("workspace", workspace)),
+                        "branch": str(outcome.get("branch", branch)),
+                        "failure": str(outcome.get("failure", failure_text[:1000])),
+                    },
+                )
+            continue
         provider_config = config.provider_configs.get(provider)
         state = record_failure(
             config.runtime_directory,

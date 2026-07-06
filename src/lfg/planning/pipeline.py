@@ -19,6 +19,7 @@ from lfg.runtime.events import append_event
 from lfg.runtime.tasks import ensure_task
 from lfg.runtime.workflow import advance_workflow
 from lfg.util.atomic import atomic_write_json, atomic_write_text
+from lfg.validation.contract import infer_scaffold_owned_paths
 
 
 @dataclass(frozen=True)
@@ -405,6 +406,18 @@ def approve_latest_plan(config: ProjectConfig) -> dict[str, Any]:
     if not isinstance(packages, list):
         raise LfgError("Pending plan has no work packages")
     normalized_packages = _normalize_packages_for_repo(config.repository_root, packages)
+    for index, package in enumerate(normalized_packages):
+        if isinstance(package, dict):
+            package["owned_paths"] = infer_scaffold_owned_paths(package)
+            package["context_refs"] = _default_context_refs(package)
+            normalized_packages[index] = package
+    from lfg.validation.contract import validate_packages_for_freeze
+
+    validate_packages_for_freeze(
+        config.repository_root,
+        normalized_packages,
+        require_context_refs=True,
+    )
     config_dir = config.repository_root / ".lfg"
     atomic_write_text(
         config_dir / "plan.md",
@@ -443,6 +456,17 @@ def approve_latest_plan(config: ProjectConfig) -> dict[str, Any]:
         payload={"run_id": payload["run_id"]},
     )
     return payload
+
+
+def _default_context_refs(package: dict[str, Any]) -> list[str]:
+    refs = list(package.get("context_refs", []))
+    if refs:
+        return [str(item) for item in refs]
+    return [
+        "context/ARCHITECTURE.md",
+        "context/TEST_STRATEGY.md",
+        "context/CONTRIBUTING_AGENTS.md",
+    ]
 
 
 def _normalize_packages_for_repo(

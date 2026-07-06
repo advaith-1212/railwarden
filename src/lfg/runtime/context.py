@@ -78,3 +78,23 @@ def write_context_file(config: ProjectConfig, file: str, content: str) -> dict[s
         raise ValueError("Context writes must stay under context/") from exc
     atomic_write_text(path, content.rstrip() + "\n")
     return {"status": "written", "file": str(path), "updated_at": time.time()}
+
+
+def resolve_context_refs(
+    repository_root: Path,
+    refs: tuple[str, ...] | list[str],
+    *,
+    max_chars_per_file: int = 8000,
+) -> str:
+    chunks: list[str] = []
+    for ref in refs:
+        path = repository_root / str(ref)
+        if not path.exists() or not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8").strip()
+        if not text:
+            continue
+        if len(text) > max_chars_per_file:
+            text = text[:max_chars_per_file] + "\n...[truncated]..."
+        chunks.append(f"### {ref}\n\n{text}")
+    return "\n\n".join(chunks)

@@ -1,20 +1,24 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
+import yaml
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
 from lfg.config.loader import load_project_files
-from lfg.engine.controller import integration_candidates
+from lfg.engine.controller import controller_tick, integration_candidates
 from lfg.errors import LfgError
 from lfg.git import changed_files_in_commit, head
-from lfg.planning.pipeline import approve_latest_plan, create_pending_plan
+from lfg.integration.manager import integrate_one
+from lfg.planning.jobs import planning_status, start_planning_job
+from lfg.planning.pipeline import approve_latest_plan
 from lfg.runtime.checkpoints import create_checkpoint_commit
 from lfg.runtime.context import context_status, write_context_file
 from lfg.runtime.decisions import inspect_failure, record_decision
@@ -31,6 +35,9 @@ from lfg.runtime.session import (
 from lfg.runtime.skills import create_runtime_skill, promote_runtime_skill
 from lfg.runtime.tasks import load_tasks, transition_task
 from lfg.scheduler.classifier import package_branch, package_worktree
+from lfg.tmux.session import send_worker_message
+from lfg.util.atomic import atomic_write_text
+from lfg.validation.contract import validate_packages_for_freeze
 from lfg.validation.package import run_package_validation
 from lfg.validation.review import run_package_review
 
@@ -73,7 +80,13 @@ def tools(start: Path) -> dict[str, Tool]:
         "lfg.goal.submit": Tool(
             "lfg.goal.submit",
             "Create a pending LFG plan from a goal.",
-            no_args({"goal": {"type": "string", "minLength": 1}}, ["goal"]),
+            no_args(
+                {
+                    "goal": {"type": "string", "minLength": 1},
+                    "replace": {"type": "boolean"},
+                },
+                ["goal"],
+            ),
             lambda payload: _goal_submit(start, payload),
         ),
         "lfg.plan.create": Tool(
@@ -93,6 +106,12 @@ def tools(start: Path) -> dict[str, Tool]:
             "Show the latest pending LFG plan and work packages.",
             no_args(),
             lambda _payload: _plan_show(start),
+        ),
+        "lfg.plan.status": Tool(
+            "lfg.plan.status",
+            "Return async planning job status.",
+            no_args({"run_id": {"type": "string"}}, []),
+            lambda payload: _plan_status(start, payload),
         ),
         "lfg.plan.reject": Tool(
             "lfg.plan.reject",
@@ -220,6 +239,25 @@ def tools(start: Path) -> dict[str, Tool]:
             no_args(),
             lambda _payload: _integration_status(start),
         ),
+        "lfg.integration.reconcile": Tool(
+            "lfg.integration.reconcile",
+            "Merge and validate the next integration candidate.",
+            no_args(),
+            lambda _payload: _integration_reconcile(start),
+        ),
+        "lfg.worker.message": Tool(
+            "lfg.worker.message",
+            "Send guidance to a live worker tmux pane.",
+            no_args(
+                {
+                    "message": {"type": "string", "minLength": 1},
+                    "agent_id": {"type": "string"},
+                    "task_id": {"type": "string"},
+                },
+                ["message"],
+            ),
+            lambda payload: _worker_message(start, payload),
+        ),
         "lfg.validation.run": Tool(
             "lfg.validation.run",
             "Run LFG-owned package validation.",
@@ -273,6 +311,12 @@ def tools(start: Path) -> dict[str, Tool]:
                 ["package_id", "patch"],
             ),
             lambda payload: _contract_repair(start, payload),
+        ),
+        "lfg.contract.repair.apply": Tool(
+            "lfg.contract.repair.apply",
+            "Apply a recorded contract repair patch to work packages.",
+            no_args({"package_id": {"type": "string", "minLength": 1}}, ["package_id"]),
+            lambda payload: _contract_repair_apply(start, payload),
         ),
         "lfg.decision.record": Tool(
             "lfg.decision.record",
@@ -361,6 +405,13 @@ def fastmcp_server(start: Path | None = None) -> FastMCP:
     )
     def plan_show() -> dict[str, Any]:
         return _plan_show(root)
+
+    @server.tool(
+        name="lfg.plan.status",
+        description="Return async planning job status.",
+    )
+    def plan_status(run_id: str = "") -> dict[str, Any]:
+        return _plan_status(root, {"run_id": run_id} if run_id else {})
 
     @server.tool(
         name="lfg.plan.reject",
@@ -531,6 +582,34 @@ def fastmcp_server(start: Path | None = None) -> FastMCP:
         return _contract_repair(root, {"package_id": package_id, "patch": patch})
 
     @server.tool(
+        name="lfg.contract.repair.apply",
+        description="Apply a recorded contract repair patch to work packages.",
+    )
+    def contract_repair_apply(package_id: NonEmptyString) -> dict[str, Any]:
+        return _contract_repair_apply(root, {"package_id": package_id})
+
+    @server.tool(
+        name="lfg.integration.reconcile",
+        description="Merge and validate the next integration candidate.",
+    )
+    def integration_reconcile() -> dict[str, Any]:
+        return _integration_reconcile(root)
+
+    @server.tool(
+        name="lfg.worker.message",
+        description="Send guidance to a live worker tmux pane.",
+    )
+    def worker_message(
+        message: NonEmptyString,
+        agent_id: str | None = None,
+        task_id: str | None = None,
+    ) -> dict[str, Any]:
+        return _worker_message(
+            root,
+            {"message": message, "agent_id": agent_id, "task_id": task_id},
+        )
+
+    @server.tool(
         name="lfg.decision.record",
         description="Append a Hermes supervisor decision record.",
     )
@@ -594,8 +673,27 @@ def serve(start: Path | None = None) -> int:
 
 def _goal_submit(start: Path, payload: dict[str, Any]) -> dict[str, Any]:
     files = load_project_files(start)
-    pending = create_pending_plan(files.project, str(payload["goal"]))
-    return {"run_id": pending.run_id, "status": "pending"}
+    replace = bool(payload.get("replace", False))
+    fixture = os.environ.get("LFG_PLANNER_OUTPUT")
+    if fixture:
+        from lfg.planning.pipeline import create_pending_plan
+
+        pending = create_pending_plan(
+            files.project, str(payload["goal"]), planner_output_text=fixture
+        )
+        return {"run_id": pending.run_id, "status": "ready"}
+    return start_planning_job(
+        files.project, str(payload["goal"]), replace=replace
+    )
+
+
+def _plan_status(start: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    files = load_project_files(start)
+    run_id = payload.get("run_id")
+    return planning_status(
+        files.project,
+        run_id=str(run_id) if run_id else None,
+    )
 
 
 def _plan_approve(start: Path) -> dict[str, Any]:
@@ -809,6 +907,69 @@ def _contract_repair(start: Path, payload: dict[str, Any]) -> dict[str, Any]:
         encoding="utf-8",
     )
     return {"status": "recorded", "package_id": package_id, "path": str(path)}
+
+
+def _contract_repair_apply(start: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    files = load_project_files(start)
+    package_id = str(payload["package_id"])
+    repair_path = files.project.runtime_directory / "contract-repairs" / f"{package_id}.json"
+    if not repair_path.exists():
+        raise LfgError(f"No recorded repair patch for {package_id}")
+    patch = json.loads(repair_path.read_text(encoding="utf-8"))
+    if not isinstance(patch, dict):
+        raise LfgError(f"Invalid repair patch for {package_id}")
+    packages_path = start / ".lfg" / "work_packages.yaml"
+    packages_payload = yaml.safe_load(packages_path.read_text(encoding="utf-8"))
+    if not isinstance(packages_payload, dict):
+        raise LfgError("work_packages.yaml must contain a mapping")
+    raw_packages = packages_payload.get("work_packages", [])
+    if not isinstance(raw_packages, list):
+        raise LfgError("work_packages.yaml must contain work_packages list")
+    updated = False
+    for item in raw_packages:
+        if isinstance(item, dict) and str(item.get("id")) == package_id:
+            item.update(patch)
+            updated = True
+            break
+    if not updated:
+        raise LfgError(f"Unknown package: {package_id}")
+    validate_packages_for_freeze(
+        start,
+        [item for item in raw_packages if isinstance(item, dict)],
+        require_context_refs=False,
+    )
+    atomic_write_text(packages_path, yaml.safe_dump(packages_payload, sort_keys=False))
+    return {"status": "applied", "package_id": package_id, "patch": patch}
+
+
+def _integration_reconcile(start: Path) -> dict[str, Any]:
+    files = load_project_files(start)
+    candidates = integration_candidates(files)
+    if not candidates:
+        return {"status": "idle", "integrated": None}
+    integrated = integrate_one(
+        config=files.project,
+        candidate=candidates[0],
+        validation_commands=files.validation,
+        execute=True,
+    )
+    controller_tick(files, launch=False, integrate=False)
+    return {"status": "integrated", "integrated": integrated}
+
+
+def _worker_message(start: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    files = load_project_files(start)
+    message = str(payload["message"])
+    agent_id = str(payload["agent_id"]) if payload.get("agent_id") else None
+    task_id = str(payload["task_id"]) if payload.get("task_id") else None
+    if not agent_id and not task_id:
+        raise LfgError("agent_id or task_id is required")
+    return send_worker_message(
+        files.project,
+        agent_id=agent_id,
+        task_id=task_id,
+        message=message,
+    )
 
 
 def _decision_record(start: Path, payload: dict[str, Any]) -> dict[str, Any]:

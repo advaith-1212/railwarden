@@ -323,7 +323,7 @@ def _select_setup_for_agent(
     )
     selected = _prompt_choice(default_choice, f"{_role_label(agent)} setup", choices)
     if selected == "keep-current":
-        return default_model_ref, agent.model_profile.auth_ref, None
+        return default_model_ref, agent.model_profile.auth_ref, agent.setup_name
     if selected == "create-new":
         created = _create_named_setup(agent)
         save_launch_setup(created["setup"], env=created["env"])
@@ -372,10 +372,17 @@ def _create_named_setup(agent: AgentInstance) -> CreatedSetup:
             env["GEMINI_API_KEY"] = api_key
             env["GOOGLE_API_KEY"] = api_key
     elif provider == "azure-foundry":
+        from lfg.hermes.azure import validate_azure_inference_endpoint
+
         auth_env_var = default_auth_env_var(provider, name)
-        endpoint = _prompt("", "Azure endpoint URL")
+        endpoint = _prompt(
+            "",
+            "Azure inference endpoint URL (not Foundry project URL)",
+        )
+        endpoint = validate_azure_inference_endpoint(endpoint)
         api_key = _prompt_secret("Azure API key")
         api_version = _prompt("2024-10-21", "Azure OpenAI API version")
+        base_url = endpoint
         env[auth_env_var] = api_key
         env["AZURE_FOUNDRY_API_KEY"] = api_key
         env["AZURE_OPENAI_API_KEY"] = api_key
@@ -2060,7 +2067,7 @@ def cmd_hermes_supervisor(args: argparse.Namespace) -> int:
                 transition_task(
                     files.project.runtime_directory,
                     task,
-                    "running",
+                    "validating",
                     {"runtime_result_path": result["path"]},
                 )
             elif action == "handoff_provider":

@@ -78,7 +78,7 @@ def classify_packages(
         and branch_has_new_commits(
             config.repository_root,
             overrides.get(package_id, package_branch(package)),
-            base_branch="main",
+            base_branch=config.integration_branch,
         )
         and branch_is_ancestor(
             config.repository_root,

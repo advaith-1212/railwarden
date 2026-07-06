@@ -71,6 +71,7 @@ class ProjectConfig:
     hermes_workspace_mode: str = "worktree"
     execution_require_plan_approval: bool = True
     execution_preserve_partial_work_on_handoff: bool = True
+    supervision_mode: str = "controller"
     monitoring_git_graph: bool = True
 
 

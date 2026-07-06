@@ -13,6 +13,7 @@ from lfg.engine.dashboard import render_dashboard
 from lfg.providers.adapters import ProviderAdapter
 from lfg.providers.health import classify_failure
 from lfg.runtime.tasks import load_tasks, save_tasks
+from tests.conftest import initialize_populated_project
 
 
 def _write_package(repo: Path, *, preferred: list[str] | None = None) -> None:
@@ -27,6 +28,10 @@ def _write_package(repo: Path, *, preferred: list[str] | None = None) -> None:
                         "objective": "Edit app",
                         "dependencies": [],
                         "owned_paths": ["app/"],
+                        "context_refs": [
+                            "context/ARCHITECTURE.md",
+                            "context/TEST_STRATEGY.md",
+                        ],
                         "preferred_providers": preferred or [],
                     }
                 ],
@@ -71,7 +76,7 @@ def test_setup_initializes_fresh_repo_baseline(tmp_path: Path) -> None:
 
 
 def test_controller_waits_for_plan_approval(git_repo: Path) -> None:
-    initialize_project(git_repo, yes=True)
+    initialize_populated_project(git_repo)
     _write_package(git_repo)
     files = load_project_files(git_repo)
 
@@ -81,7 +86,7 @@ def test_controller_waits_for_plan_approval(git_repo: Path) -> None:
 
 
 def test_controller_assigns_ready_task_by_provider_priority(git_repo: Path) -> None:
-    initialize_project(git_repo, yes=True)
+    initialize_populated_project(git_repo)
     project_path = git_repo / ".lfg" / "project.yaml"
     project = yaml.safe_load(project_path.read_text(encoding="utf-8"))
     project["project"]["integration_branch"] = "main"
@@ -104,7 +109,7 @@ def test_controller_assigns_ready_task_by_provider_priority(git_repo: Path) -> N
 
 
 def test_dashboard_renders_runtime_state(git_repo: Path) -> None:
-    initialize_project(git_repo, yes=True)
+    initialize_populated_project(git_repo)
     _write_package(git_repo)
     _approve(git_repo)
     files = load_project_files(git_repo)
@@ -120,7 +125,7 @@ def test_dashboard_renders_runtime_state(git_repo: Path) -> None:
 def test_controller_runs_lfg_validation_and_review_before_merge(
     git_repo: Path,
 ) -> None:
-    initialize_project(git_repo, yes=True)
+    initialize_populated_project(git_repo)
     project_path = git_repo / ".lfg" / "project.yaml"
     project = yaml.safe_load(project_path.read_text(encoding="utf-8"))
     project["project"]["integration_branch"] = "main"
@@ -135,6 +140,10 @@ def test_controller_runs_lfg_validation_and_review_before_merge(
                         "name": "Validated package",
                         "objective": "Do work",
                         "owned_paths": ["app"],
+                        "context_refs": [
+                            "context/ARCHITECTURE.md",
+                            "context/TEST_STRATEGY.md",
+                        ],
                         "preferred_providers": ["codex"],
                         "validation_commands": [
                             {
@@ -223,7 +232,7 @@ def test_result_path_sandbox_failure_is_not_auth() -> None:
 
 
 def test_controller_recovers_from_stale_provider_auth_state(git_repo: Path) -> None:
-    initialize_project(git_repo, yes=True)
+    initialize_populated_project(git_repo)
     project_path = git_repo / ".lfg" / "project.yaml"
     project = yaml.safe_load(project_path.read_text(encoding="utf-8"))
     project["project"]["integration_branch"] = "main"
@@ -263,7 +272,7 @@ def test_controller_recovers_from_stale_provider_auth_state(git_repo: Path) -> N
 
 
 def test_dead_quota_process_creates_handoff_and_reassigns(git_repo: Path) -> None:
-    initialize_project(git_repo, yes=True)
+    initialize_populated_project(git_repo)
     project_path = git_repo / ".lfg" / "project.yaml"
     project = yaml.safe_load(project_path.read_text(encoding="utf-8"))
     project["project"]["integration_branch"] = "main"

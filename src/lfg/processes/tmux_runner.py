@@ -8,6 +8,7 @@ from pathlib import Path
 from lfg.processes.supervisor import ManagedCommand, ManagedProcess, coerce_command
 from lfg.tmux.session import tmux
 from lfg.util.atomic import atomic_write_json, atomic_write_text
+from lfg.workers.pane_runtime import task_pane_command
 
 
 def pane_map(runtime_dir: Path) -> dict[str, str]:
@@ -63,9 +64,18 @@ def launch_tmux_managed(
         "updated_at": time.time(),
     }
     atomic_write_json(pid_path, payload)
-    atomic_write_text(script_path, _script(managed_command, pid_path, provider))
-    script_path.chmod(0o700)
-    tmux(["send-keys", "-t", pane_id, f"bash {shlex.quote(str(script_path))}", "C-m"])
+    pane_command = task_pane_command(
+        argv=managed_command.argv,
+        cwd=managed_command.cwd,
+        log_path=managed_command.log_path,
+    )
+    if managed_command.stdin_path is not None:
+        atomic_write_text(script_path, _script(managed_command, pid_path, provider))
+        script_path.chmod(0o700)
+        tmux(["send-keys", "-t", pane_id, f"bash {shlex.quote(str(script_path))}", "C-m"])
+    else:
+        tmux(["send-keys", "-t", pane_id, "C-c"])
+        tmux(["send-keys", "-t", pane_id, pane_command, "C-m"])
     return ManagedProcess(
         pid=0,
         pgid=0,
