@@ -51,7 +51,11 @@ def start_planning_job(
     pending = pending_plan_path(runtime_dir)
     if pending.exists() and not replace:
         payload = json.loads(pending.read_text(encoding="utf-8"))
-        if isinstance(payload, dict) and not payload.get("approved"):
+        if (
+            isinstance(payload, dict)
+            and not payload.get("approved")
+            and not payload.get("rejected")
+        ):
             raise LfgError(
                 "A pending plan already exists. Approve, reject, or pass replace=true."
             )
@@ -115,7 +119,7 @@ def execute_planning_job(config: ProjectConfig, run_id: str) -> None:
             Path(fixture_path).read_text(encoding="utf-8") if fixture_path else None
         )
         pending_plan = create_pending_plan(
-            config, goal, planner_output_text=fixture
+            config, goal, planner_output_text=fixture, run_id=run_id
         )
         finished = {
             "run_id": pending_plan.run_id,

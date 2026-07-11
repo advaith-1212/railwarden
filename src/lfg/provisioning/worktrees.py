@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from lfg.errors import GitError
@@ -9,7 +10,13 @@ from lfg.git import (
     run_git,
     tracked_is_clean,
     worktree_entries,
+    worktree_is_usable,
 )
+
+
+def _remove_workspace(repository: Path, workspace: Path) -> None:
+    run_git(repository, "worktree", "prune", check=False)
+    shutil.rmtree(workspace)
 
 
 def is_registered_worktree(repository: Path, workspace: Path) -> bool:
@@ -33,7 +40,16 @@ def ensure_worktree(
         is_registered_worktree(repository, workspace) if workspace.exists() else False
     )
     if workspace.exists() and not registered:
-        raise GitError(f"Refusing to use unregistered path as a worktree: {workspace}")
+        git_marker = workspace / ".git"
+        if git_marker.exists():
+            if worktree_is_usable(workspace):
+                raise GitError(
+                    f"Refusing to use unregistered path as a worktree: {workspace}"
+                )
+            _remove_workspace(repository, workspace)
+        else:
+            shutil.rmtree(workspace)
+        registered = False
     if registered:
         actual_branch = current_branch(workspace)
         if actual_branch != branch:

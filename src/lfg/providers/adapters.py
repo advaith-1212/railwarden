@@ -60,7 +60,7 @@ class ProviderAdapter:
                 self.executable,
                 "exec",
                 "--sandbox",
-                "workspace-write",
+                "danger-full-access",
                 "--cd",
                 str(workspace),
                 "--model",

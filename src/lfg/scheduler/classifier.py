@@ -4,7 +4,14 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from lfg.config.models import ProjectConfig, WorkPackage
-from lfg.git import branch_exists, branch_is_ancestor, head, output, tracked_is_clean
+from lfg.git import (
+    branch_exists,
+    branch_is_ancestor,
+    head,
+    output,
+    tracked_is_clean,
+    worktree_is_usable,
+)
 from lfg.scheduler.dag import validate_dag
 from lfg.tasks.file_backend import ACTIVE_TASK_STATES, FileTaskBackend
 
@@ -38,7 +45,11 @@ def package_worktree(config: ProjectConfig, package: WorkPackage) -> Path:
     if package.worktree is not None:
         path = Path(package.worktree)
         return path if path.is_absolute() else config.worktree_root / path
-    return config.worktree_root / package.package_id.lower().replace("-", "")
+    from lfg.tmux.session import normalized_project_name
+
+    namespace = normalized_project_name(config.name)
+    slug = package.package_id.lower().replace("-", "")
+    return config.worktree_root / namespace / slug
 
 
 def branch_has_new_commits(
@@ -75,11 +86,6 @@ def classify_packages(
         if branch_exists(
             config.repository_root, overrides.get(package_id, package_branch(package))
         )
-        and branch_has_new_commits(
-            config.repository_root,
-            overrides.get(package_id, package_branch(package)),
-            base_branch=config.integration_branch,
-        )
         and branch_is_ancestor(
             config.repository_root,
             overrides.get(package_id, package_branch(package)),
@@ -95,7 +101,11 @@ def classify_packages(
             if branch_exists(config.repository_root, branch)
             else None
         )
-        dirty = worktree.is_dir() and not tracked_is_clean(worktree)
+        dirty = (
+            worktree.is_dir()
+            and worktree_is_usable(worktree)
+            and not tracked_is_clean(worktree)
+        )
         has_commits = branch_head is not None and branch_has_new_commits(
             config.repository_root,
             branch,

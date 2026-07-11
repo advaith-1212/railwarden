@@ -348,7 +348,8 @@ def test_tmux_launch_layout_has_factory_and_observability(git_repo: Path) -> Non
     )
     assert any("role=coder exec=codex provider=codex" in spec.title for spec in specs)
     assert any("lfg observability" in spec.command for spec in specs)
-    assert any("exec codex" in spec.command for spec in specs)
+    assert any("&& codex" in spec.command for spec in specs)
+    assert not any("exec codex" in spec.command for spec in specs)
     assert all("set -a;" in spec.command for spec in specs if spec.window == "factory")
     assert not any("lfg worker codex" in spec.command for spec in specs)
     assert any(spec.window == "observability" and "lfg controller" in spec.command for spec in specs)
@@ -686,7 +687,7 @@ def test_agent_swap_creates_handoff_and_relaunches_with_override(
 
     controller_tick(load_project_files(git_repo), launch=False, integrate=False)
     relaunched = load_tasks(files.project.runtime_directory)[0]
-    assert relaunched["status"] == "assigned"
+    assert relaunched["status"] == "ready"
     assert relaunched["provider"] == "antigravity"
 
 
@@ -723,7 +724,7 @@ def test_crash_resume_checkpoints_dirty_worktree_and_reassigns(git_repo: Path) -
     controller_tick(load_project_files(git_repo), launch=False, integrate=False)
 
     recovered = load_tasks(files.project.runtime_directory)[0]
-    assert recovered["status"] == "assigned"
+    assert recovered["status"] == "ready"
     assert recovered["provider"] != "codex"
     assert Path(str(recovered["handoff_packet"])).exists()
     assert recovered["checkpoint"]["status"] == "created"

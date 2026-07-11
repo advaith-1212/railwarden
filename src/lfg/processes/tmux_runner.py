@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import shlex
+import subprocess
 import time
 from pathlib import Path
 
 from lfg.processes.supervisor import ManagedCommand, ManagedProcess, coerce_command
-from lfg.tmux.session import tmux
+from lfg.processes.supervisor import launch_managed
+from lfg.tmux.session import pane_alive, tmux
 from lfg.util.atomic import atomic_write_json, atomic_write_text
 from lfg.workers.pane_runtime import task_pane_command
 
@@ -26,10 +28,16 @@ def pane_for_worker(
     runtime_dir: Path, *, agent_id: str | None, provider: str
 ) -> str | None:
     panes = pane_map(runtime_dir)
+    candidates: list[str] = []
     if agent_id and agent_id in panes:
-        return panes[agent_id]
-    for key, pane in panes.items():
-        if key.startswith(provider):
+        candidates.append(panes[agent_id])
+    candidates.extend(pane for key, pane in panes.items() if key.startswith(provider))
+    seen: set[str] = set()
+    for pane in candidates:
+        if pane in seen:
+            continue
+        seen.add(pane)
+        if pane_alive(pane):
             return pane
     return None
 
@@ -69,13 +77,27 @@ def launch_tmux_managed(
         cwd=managed_command.cwd,
         log_path=managed_command.log_path,
     )
-    if managed_command.stdin_path is not None:
-        atomic_write_text(script_path, _script(managed_command, pid_path, provider))
-        script_path.chmod(0o700)
-        tmux(["send-keys", "-t", pane_id, f"bash {shlex.quote(str(script_path))}", "C-m"])
-    else:
-        tmux(["send-keys", "-t", pane_id, "C-c"])
-        tmux(["send-keys", "-t", pane_id, pane_command, "C-m"])
+    if not pane_alive(pane_id):
+        return launch_managed(
+            managed_command,
+            pid_path=pid_path,
+        )
+    try:
+        if managed_command.stdin_path is not None:
+            atomic_write_text(script_path, _script(managed_command, pid_path, provider))
+            script_path.chmod(0o700)
+            tmux(
+                ["send-keys", "-t", pane_id, f"bash {shlex.quote(str(script_path))}", "C-m"]
+            )
+        else:
+            tmux(["send-keys", "-t", pane_id, "C-c"], check=False)
+            tmux(["send-keys", "-t", pane_id, "C-c"], check=False)
+            tmux(["send-keys", "-t", pane_id, "C-u", pane_command, "C-m"])
+    except subprocess.CalledProcessError:
+        return launch_managed(
+            managed_command,
+            pid_path=pid_path,
+        )
     return ManagedProcess(
         pid=0,
         pgid=0,

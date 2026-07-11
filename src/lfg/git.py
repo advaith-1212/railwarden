@@ -68,6 +68,10 @@ def is_clean(repository: Path) -> bool:
     return output(repository, "status", "--porcelain") == ""
 
 
+def worktree_is_usable(repository: Path) -> bool:
+    return run_git(repository, "rev-parse", "--git-dir", check=False).returncode == 0
+
+
 def tracked_is_clean(repository: Path) -> bool:
     return output(repository, "status", "--porcelain", "--untracked-files=no") == ""
 

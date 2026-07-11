@@ -17,12 +17,15 @@ def idle_pane_command(
     provider = adapter.name
     label = f"{agent.agent_id} ({provider}) ready — tasks assigned by Hermes/LFG"
     if provider == "codex":
-        return f"cd {root} && echo {shlex.quote(label)} && exec codex"
+        return f"cd {root} && echo {shlex.quote(label)} && codex"
     if provider == "antigravity":
-        return f"cd {root} && echo {shlex.quote(label)} && exec agy"
+        return (
+            f"cd {root} && echo {shlex.quote(label)} && "
+            "agy --dangerously-skip-permissions"
+        )
     if provider == "composer":
-        return f"cd {root} && echo {shlex.quote(label)} && exec grok"
-    return f"cd {root} && echo {shlex.quote(label)} && exec ${{SHELL:-/bin/sh}}"
+        return f"cd {root} && echo {shlex.quote(label)} && grok"
+    return f"cd {root} && echo {shlex.quote(label)} && ${{SHELL:-/bin/sh}}"
 
 
 def task_pane_command(

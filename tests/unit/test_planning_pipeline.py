@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import yaml
 
 from lfg.config.init import initialize_project
 from lfg.config.loader import load_project_files
+from lfg.mcp.server import _contract_repair, _contract_repair_apply
 from lfg.planning.pipeline import (
     approve_latest_plan,
     create_pending_plan,
@@ -230,6 +232,72 @@ def test_approve_pending_plan_normalizes_repo_paths(git_repo: Path) -> None:
 
     assert package["owned_paths"] == ["index.html", "styles.css", "src/app.js"]
     assert package["forbidden_paths"] == ["styles.css"]
+
+
+def test_contract_repair_works_on_pending_plan(git_repo: Path) -> None:
+    initialize_project(git_repo, yes=True)
+    files = load_project_files(git_repo)
+    create_pending_plan(
+        files.project,
+        "build expense tracker",
+        planner_output_text=PLANNER_OUTPUT,
+    )
+
+    recorded = _contract_repair(
+        git_repo,
+        {
+            "package_id": "WP-1",
+            "patch": {"objective": "Repaired objective"},
+        },
+    )
+    assert recorded["status"] == "recorded"
+
+    applied = _contract_repair_apply(git_repo, {"package_id": "WP-1"})
+    assert applied["status"] == "applied"
+    assert applied["pending"] is True
+
+    pending = json.loads(
+        (files.project.runtime_directory / "state" / "pending-plan.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert pending["work_packages"][0]["objective"] == "Repaired objective"
+
+
+def test_approve_pending_plan_sanitizes_future_context_refs(git_repo: Path) -> None:
+    initialize_project(git_repo, yes=True)
+    files = load_project_files(git_repo)
+    output = """
+{
+  "plan_markdown": "# Plan\\n\\nBuild expense tracker.",
+  "work_packages": [
+    {
+      "id": "WP-001",
+      "name": "Scaffold",
+      "objective": "Initialize project",
+      "dependencies": [],
+      "owned_paths": ["src/constants.js"],
+      "context_refs": ["context/ARCHITECTURE.md"]
+    },
+    {
+      "id": "WP-004",
+      "name": "Features",
+      "objective": "Add expense features",
+      "dependencies": ["WP-001"],
+      "owned_paths": ["src/app.js"],
+      "context_refs": ["src/constants.js", "context/TEST_STRATEGY.md"]
+    }
+  ]
+}
+"""
+    create_pending_plan(files.project, "build expense tracker", planner_output_text=output)
+
+    approved = approve_latest_plan(files.project)
+    packages = {item["id"]: item for item in approved["work_packages"]}
+
+    assert packages["WP-001"]["context_refs"] == ["context/ARCHITECTURE.md"]
+    assert packages["WP-004"]["context_refs"] == ["context/TEST_STRATEGY.md"]
+    assert "src/constants.js" not in packages["WP-004"]["context_refs"]
 
 
 def test_commands_for_package_ignores_prose_acceptance_tests() -> None:

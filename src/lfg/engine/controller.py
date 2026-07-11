@@ -796,56 +796,71 @@ def launch_task(
         "runtime_result_path": str(runtime_result_path),
         "log_path": str(log_path),
     }
-    transition_task(config.runtime_directory, task, "assigned", payload)
     agent = _agent_for_provider(files, provider)
+    if not launch:
+        transition_task(config.runtime_directory, task, "ready", payload)
+        if agent is not None:
+            _set_agent_runtime_state(
+                config,
+                agent,
+                state="ready",
+                active_task=str(task["id"]),
+            )
+        append_event(
+            config.runtime_directory,
+            "task_launch_planned",
+            {"provider": provider, "package_id": package.package_id},
+            task_id=str(task["id"]),
+        )
+        return task
+    transition_task(config.runtime_directory, task, "assigned", payload)
     if agent is not None:
         _set_agent_runtime_state(
             config,
             agent,
-            state="running" if launch else "ready",
+            state="running",
             active_task=str(task["id"]),
         )
-    if launch:
-        pane_id = pane_for_worker(
-            config.runtime_directory,
-            agent_id=agent.agent_id if agent is not None else None,
+    pane_id = pane_for_worker(
+        config.runtime_directory,
+        agent_id=agent.agent_id if agent is not None else None,
+        provider=provider,
+    )
+    if pane_id:
+        managed = launch_tmux_managed(
+            command,
+            pid_path=_process_path(config, str(task["id"])),
+            script_path=_tmux_script_path(config, str(task["id"]), attempt),
+            pane_id=pane_id,
             provider=provider,
         )
-        if pane_id:
-            managed = launch_tmux_managed(
-                command,
-                pid_path=_process_path(config, str(task["id"])),
-                script_path=_tmux_script_path(config, str(task["id"]), attempt),
-                pane_id=pane_id,
-                provider=provider,
-            )
-        else:
-            managed = launch_managed(
-                command,
-                pid_path=_process_path(config, str(task["id"])),
-            )
-        process_payload = {
-            "pid": managed.pid,
-            "pgid": managed.pgid,
-            "command": list(managed.command),
-            "cwd": str(command.cwd),
-            "stdin_path": str(command.stdin_path) if command.stdin_path else None,
-            "log_path": str(managed.log_path),
-            "provider": provider,
-            "status": "running" if not pane_id else "launching",
-            "started_at": time.time(),
-            "updated_at": time.time(),
-        }
-        if pane_id:
-            process_payload.update(
-                {"mode": "tmux", "pane_id": pane_id, "status": "launching"}
-            )
-        process_path = _process_path(config, str(task["id"]))
-        process_path.write_text(json.dumps(process_payload, indent=2), encoding="utf-8")
-        transition_task(config.runtime_directory, task, "running", {"pid": managed.pid})
+    else:
+        managed = launch_managed(
+            command,
+            pid_path=_process_path(config, str(task["id"])),
+        )
+    process_payload = {
+        "pid": managed.pid,
+        "pgid": managed.pgid,
+        "command": list(managed.command),
+        "cwd": str(command.cwd),
+        "stdin_path": str(command.stdin_path) if command.stdin_path else None,
+        "log_path": str(managed.log_path),
+        "provider": provider,
+        "status": "running" if not pane_id else "launching",
+        "started_at": time.time(),
+        "updated_at": time.time(),
+    }
+    if pane_id:
+        process_payload.update(
+            {"mode": "tmux", "pane_id": pane_id, "status": "launching"}
+        )
+    process_path = _process_path(config, str(task["id"]))
+    process_path.write_text(json.dumps(process_payload, indent=2), encoding="utf-8")
+    transition_task(config.runtime_directory, task, "running", {"pid": managed.pid})
     append_event(
         config.runtime_directory,
-        "task_launched" if launch else "task_launch_planned",
+        "task_launched",
         {"provider": provider, "package_id": package.package_id},
         task_id=str(task["id"]),
     )

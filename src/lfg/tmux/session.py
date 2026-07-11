@@ -38,6 +38,16 @@ def has_session(name: str) -> bool:
     return tmux(["has-session", "-t", name], check=False).returncode == 0
 
 
+def pane_alive(pane_id: str) -> bool:
+    return (
+        tmux(
+            ["list-panes", "-a", "-F", "#{pane_id}\t#{pane_dead}", "-f", f"#{pane_id}"],
+            check=False,
+        ).returncode
+        == 0
+    )
+
+
 @dataclass(frozen=True)
 class PaneSpec:
     key: str

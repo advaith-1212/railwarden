@@ -80,8 +80,14 @@ def infer_scaffold_owned_paths(package: dict[str, Any]) -> list[str]:
     name = str(package.get("name", "")).lower()
     owned = list(package.get("owned_paths", []))
     existing = {str(item) for item in owned}
-    hints = ("scaffold", "bootstrap", "init", "vite", "react", "npm", "frontend")
-    if not any(hint in objective or hint in name for hint in hints):
+    package_id = str(package.get("id", "")).upper()
+    is_scaffold = (
+        "scaffold" in name
+        or package_id.endswith("-001")
+        or "initialize the project" in objective
+        or "project directory" in objective
+    )
+    if not is_scaffold:
         return owned
     for extra in (
         "package.json",

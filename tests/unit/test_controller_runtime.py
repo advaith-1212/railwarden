@@ -102,7 +102,7 @@ def test_controller_assigns_ready_task_by_provider_priority(git_repo: Path) -> N
 
     assert result["launched"] == [{"task_id": "task-WP-1", "provider": "codex"}]
     task = load_tasks(files.project.runtime_directory)[0]
-    assert task["status"] == "assigned"
+    assert task["status"] == "ready"
     assert task["provider"] == "codex"
     assert ".lfg-results" in task["result_path"]
     assert ".lfg-runtime/results" in task["runtime_result_path"]
@@ -299,6 +299,6 @@ def test_dead_quota_process_creates_handoff_and_reassigns(git_repo: Path) -> Non
     controller_tick(load_project_files(git_repo), launch=False)
 
     updated = load_tasks(files.project.runtime_directory)[0]
-    assert updated["status"] == "assigned"
+    assert updated["status"] == "ready"
     assert updated["provider"] == "composer"
     assert Path(str(updated["handoff_packet"])).exists()

@@ -102,7 +102,7 @@ def load_project_config(repository_root: Path) -> ProjectConfig:
         worktree_root=_path(
             repository_root,
             str(project.get("worktree_root", "auto")),
-            "../.lfg-worktrees",
+            ".lfg-worktrees",
         ),
         runtime_directory=_path(
             repository_root,

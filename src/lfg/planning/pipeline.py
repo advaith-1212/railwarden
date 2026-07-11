@@ -19,6 +19,7 @@ from lfg.runtime.events import append_event
 from lfg.runtime.tasks import ensure_task
 from lfg.runtime.workflow import advance_workflow
 from lfg.util.atomic import atomic_write_json, atomic_write_text
+from lfg.validation.commands import sanitize_planner_validation_commands
 from lfg.validation.contract import infer_scaffold_owned_paths
 
 
@@ -58,7 +59,7 @@ Required shape:
       "forbidden_paths": [],
       "acceptance_tests": [],
       "acceptance_criteria": [],
-      "validation_commands": [],
+      "validation_commands": [["npm", "test"]],
       "preferred_providers": [],
       "model_profile": null,
       "reviewer_profile": null,
@@ -80,6 +81,14 @@ Focus on:
 - owned paths and forbidden paths
 - acceptance checks
 - provider hints when they are useful
+
+context_refs must reference existing files under context/ only.
+Do not put owned_paths or other future artifacts in context_refs.
+Leave context_refs empty to use project defaults.
+
+validation_commands must be structured argv arrays only, for example:
+[["npm", "install"], ["npm", "test"]]
+Do not use shell operators such as &&, |, &, or backgrounding.
 """
 
 
@@ -128,7 +137,7 @@ Required shape:
       "forbidden_paths": [],
       "acceptance_tests": [],
       "acceptance_criteria": [],
-      "validation_commands": [],
+      "validation_commands": [["npm", "test"]],
       "preferred_providers": [],
       "model_profile": null,
       "reviewer_profile": null,
@@ -149,6 +158,7 @@ Rules:
 - `dependencies` must reference other package ids.
 - Use empty arrays when information is unknown, not prose.
 - Preserve the markdown plan in `plan_markdown`.
+- `context_refs` must reference existing files under context/ only, never owned_paths.
 """
 
 
@@ -206,6 +216,7 @@ def _normalize_work_packages(packages: Any) -> list[dict[str, Any]]:
         if not package_id:
             raise LfgError("Each work package requires id")
         raw_validation = raw.get("validation_commands", raw.get("validation", [])) or []
+        validation_commands = sanitize_planner_validation_commands(raw_validation)
         normalized.append(
             {
                 "id": package_id,
@@ -216,7 +227,7 @@ def _normalize_work_packages(packages: Any) -> list[dict[str, Any]]:
                 "forbidden_paths": list(raw.get("forbidden_paths", [])),
                 "acceptance_tests": list(raw.get("acceptance_tests", [])),
                 "acceptance_criteria": list(raw.get("acceptance_criteria", [])),
-                "validation_commands": list(raw_validation),
+                "validation_commands": validation_commands,
                 "preferred_providers": list(raw.get("preferred_providers", [])),
                 "model_profile": raw.get("model_profile"),
                 "reviewer_profile": raw.get("reviewer_profile"),
@@ -302,8 +313,9 @@ def create_pending_plan(
     *,
     planner_output_text: str | None = None,
     planner_structured_output_text: str | None = None,
+    run_id: str | None = None,
 ) -> PendingPlan:
-    run_id = new_run_id()
+    run_id = run_id or new_run_id()
     prompt = build_planning_prompt(goal)
     runtime_dir = config.runtime_directory
     run_dir = runtime_dir / "runs" / run_id
@@ -406,10 +418,19 @@ def approve_latest_plan(config: ProjectConfig) -> dict[str, Any]:
     if not isinstance(packages, list):
         raise LfgError("Pending plan has no work packages")
     normalized_packages = _normalize_packages_for_repo(config.repository_root, packages)
+    normalized_packages = _resolve_owned_path_overlaps(normalized_packages)
+    all_owned_paths = _collect_owned_paths(normalized_packages)
     for index, package in enumerate(normalized_packages):
         if isinstance(package, dict):
             package["owned_paths"] = infer_scaffold_owned_paths(package)
-            package["context_refs"] = _default_context_refs(package)
+            package["context_refs"] = _sanitize_context_refs(
+                config.repository_root,
+                package,
+                all_owned_paths=all_owned_paths,
+            )
+            package["validation_commands"] = sanitize_planner_validation_commands(
+                package.get("validation_commands", [])
+            )
             normalized_packages[index] = package
     from lfg.validation.contract import validate_packages_for_freeze
 
@@ -458,15 +479,85 @@ def approve_latest_plan(config: ProjectConfig) -> dict[str, Any]:
     return payload
 
 
-def _default_context_refs(package: dict[str, Any]) -> list[str]:
-    refs = list(package.get("context_refs", []))
-    if refs:
-        return [str(item) for item in refs]
-    return [
+def _resolve_owned_path_overlaps(packages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    claims: dict[str, list[str]] = {}
+    for package in packages:
+        package_id = str(package.get("id", ""))
+        for path in package.get("owned_paths", []):
+            claims.setdefault(str(path), []).append(package_id)
+
+    winners: dict[str, str] = {}
+    for path, owners in claims.items():
+        if len(owners) == 1:
+            winners[path] = owners[0]
+            continue
+        winners[path] = max(owners, key=_package_sort_key)
+
+    resolved: list[dict[str, Any]] = []
+    for package in packages:
+        updated = dict(package)
+        owned = [
+            path
+            for path in updated.get("owned_paths", [])
+            if winners.get(str(path)) == str(package.get("id"))
+        ]
+        updated["owned_paths"] = owned
+        resolved.append(updated)
+    return resolved
+
+
+def _package_sort_key(package_id: str) -> tuple[int, str]:
+    suffix = package_id.rsplit("-", 1)[-1]
+    if suffix.isdigit():
+        return (int(suffix), package_id)
+    return (0, package_id)
+
+
+def _collect_owned_paths(packages: list[dict[str, Any]]) -> set[str]:
+    owned: set[str] = set()
+    for package in packages:
+        if not isinstance(package, dict):
+            continue
+        for path in package.get("owned_paths", []):
+            owned.add(str(path).rstrip("/"))
+    return owned
+
+
+def _default_context_refs(repository_root: Path) -> list[str]:
+    defaults = [
         "context/ARCHITECTURE.md",
         "context/TEST_STRATEGY.md",
         "context/CONTRIBUTING_AGENTS.md",
     ]
+    return [ref for ref in defaults if (repository_root / ref).is_file()]
+
+
+def _sanitize_context_refs(
+    repository_root: Path,
+    package: dict[str, Any],
+    *,
+    all_owned_paths: set[str],
+) -> list[str]:
+    refs = [
+        str(item).strip()
+        for item in package.get("context_refs", [])
+        if str(item).strip()
+    ]
+    sanitized: list[str] = []
+    for ref in refs:
+        if ref.startswith("skill:"):
+            sanitized.append(ref)
+            continue
+        if not ref.startswith("context/"):
+            continue
+        if ref.rstrip("/") in all_owned_paths:
+            continue
+        path = repository_root / ref
+        if path.is_file():
+            sanitized.append(ref)
+    if sanitized:
+        return sanitized
+    return _default_context_refs(repository_root)
 
 
 def _normalize_packages_for_repo(
@@ -491,7 +582,11 @@ def _normalize_packages_for_repo(
 def _repo_path_candidates(repository_root: Path) -> list[str]:
     paths: set[str] = set()
     for path in repository_root.rglob("*"):
-        if ".git" in path.parts or ".lfg-runtime" in path.parts:
+        if (
+            ".git" in path.parts
+            or ".lfg-runtime" in path.parts
+            or ".lfg-worktrees" in path.parts
+        ):
             continue
         relative = path.relative_to(repository_root).as_posix().rstrip("/")
         if relative:
@@ -512,6 +607,9 @@ def _normalize_repo_path(value: str, candidates: list[str]) -> str:
     normalized = normalized.rstrip("/")
     if not normalized:
         return normalized
+    if normalized.startswith(".lfg-worktrees/"):
+        leaf = normalized.split("/", 3)[-1]
+        return leaf if leaf else normalized
     if normalized in candidates:
         return normalized
 

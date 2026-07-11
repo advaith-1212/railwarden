@@ -7,7 +7,8 @@ import pytest
 
 from lfg.config.init import initialize_project
 from lfg.config.loader import load_project_files
-from lfg.planning.jobs import planning_status, start_planning_job
+from lfg.planning.jobs import pending_plan_path, planning_status, start_planning_job
+from lfg.util.atomic import atomic_write_json
 
 PLANNER_OUTPUT = """
 {
@@ -46,3 +47,24 @@ def test_goal_submit_returns_planning_status_immediately(
             break
         time.sleep(0.1)
     assert final.get("status") == "ready"
+
+
+def test_start_planning_job_allows_resubmit_after_rejection(git_repo: Path) -> None:
+    initialize_project(git_repo, yes=True)
+    files = load_project_files(git_repo)
+    runtime_dir = files.project.runtime_directory
+    atomic_write_json(
+        pending_plan_path(runtime_dir),
+        {
+            "run_id": "20260710-194211",
+            "goal": "old goal",
+            "work_packages": [],
+            "approved": False,
+            "rejected": True,
+        },
+    )
+
+    started = start_planning_job(files.project, "build expense tracker")
+
+    assert started["status"] == "planning"
+    assert started["goal"] == "build expense tracker"

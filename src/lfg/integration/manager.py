@@ -101,7 +101,21 @@ def integrate_one(
             )
             if switched and original_branch:
                 run_git(repository, "switch", original_branch)
-                run_git(repository, "merge", "--ff-only", config.integration_branch)
+                fast_forward = run_git(
+                    repository,
+                    "merge",
+                    "--ff-only",
+                    config.integration_branch,
+                    check=False,
+                )
+                if fast_forward.returncode != 0:
+                    run_git(
+                        repository,
+                        "merge",
+                        "--no-ff",
+                        "--no-edit",
+                        config.integration_branch,
+                    )
                 payload["fast_forwarded_branch"] = original_branch
                 payload["fast_forwarded_head"] = head(repository)
             evidence_path = (

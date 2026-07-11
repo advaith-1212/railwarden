@@ -36,7 +36,7 @@ from lfg.runtime.skills import create_runtime_skill, promote_runtime_skill
 from lfg.runtime.tasks import load_tasks, transition_task
 from lfg.scheduler.classifier import package_branch, package_worktree
 from lfg.tmux.session import send_worker_message
-from lfg.util.atomic import atomic_write_text
+from lfg.util.atomic import atomic_write_json, atomic_write_text
 from lfg.validation.contract import validate_packages_for_freeze
 from lfg.validation.package import run_package_validation
 from lfg.validation.review import run_package_review
@@ -382,8 +382,8 @@ def fastmcp_server(start: Path | None = None) -> FastMCP:
         name="lfg.goal.submit",
         description="Create a pending LFG plan from a goal.",
     )
-    def goal_submit(goal: NonEmptyString) -> dict[str, Any]:
-        return _goal_submit(root, {"goal": goal})
+    def goal_submit(goal: NonEmptyString, replace: bool = False) -> dict[str, Any]:
+        return _goal_submit(root, {"goal": goal, "replace": replace})
 
     @server.tool(
         name="lfg.plan.create",
@@ -895,10 +895,34 @@ def _context_write(start: Path, payload: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def _pending_plan_packages(runtime_dir: Path) -> list[dict[str, Any]]:
+    path = runtime_dir / "state" / "pending-plan.json"
+    if not path.exists():
+        return []
+    state = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(state, dict):
+        return []
+    raw_packages = state.get("work_packages", [])
+    if not isinstance(raw_packages, list):
+        return []
+    return [item for item in raw_packages if isinstance(item, dict)]
+
+
+def _contract_package_ids(files, start: Path) -> set[str]:
+    ids = set(files.packages)
+    if ids:
+        return ids
+    return {
+        str(item["id"])
+        for item in _pending_plan_packages(files.project.runtime_directory)
+        if item.get("id")
+    }
+
+
 def _contract_repair(start: Path, payload: dict[str, Any]) -> dict[str, Any]:
     files = load_project_files(start)
     package_id = str(payload["package_id"])
-    if package_id not in files.packages:
+    if package_id not in _contract_package_ids(files, start):
         raise LfgError(f"Unknown package: {package_id}")
     path = files.project.runtime_directory / "contract-repairs" / f"{package_id}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -918,7 +942,39 @@ def _contract_repair_apply(start: Path, payload: dict[str, Any]) -> dict[str, An
     patch = json.loads(repair_path.read_text(encoding="utf-8"))
     if not isinstance(patch, dict):
         raise LfgError(f"Invalid repair patch for {package_id}")
+
+    pending_path = files.project.runtime_directory / "state" / "pending-plan.json"
+    if pending_path.exists():
+        state = json.loads(pending_path.read_text(encoding="utf-8"))
+        if isinstance(state, dict) and not state.get("approved"):
+            raw_packages = state.get("work_packages", [])
+            if not isinstance(raw_packages, list):
+                raise LfgError("Pending plan has no work packages")
+            updated = False
+            for item in raw_packages:
+                if isinstance(item, dict) and str(item.get("id")) == package_id:
+                    item.update(patch)
+                    updated = True
+                    break
+            if not updated:
+                raise LfgError(f"Unknown package: {package_id}")
+            validate_packages_for_freeze(
+                start,
+                [item for item in raw_packages if isinstance(item, dict)],
+                require_context_refs=False,
+            )
+            state["work_packages"] = raw_packages
+            atomic_write_json(pending_path, state)
+            return {
+                "status": "applied",
+                "package_id": package_id,
+                "patch": patch,
+                "pending": True,
+            }
+
     packages_path = start / ".lfg" / "work_packages.yaml"
+    if not packages_path.exists():
+        raise LfgError("No frozen or pending contracts exist")
     packages_payload = yaml.safe_load(packages_path.read_text(encoding="utf-8"))
     if not isinstance(packages_payload, dict):
         raise LfgError("work_packages.yaml must contain a mapping")
