@@ -97,6 +97,68 @@ def _tmux_script_path(config: ProjectConfig, task_id: str, attempt: int) -> Path
     return config.runtime_directory / "processes" / f"{task_id}-{attempt}.sh"
 
 
+def _merge_process_launch_record(
+    process_path: Path, base: dict[str, Any]
+) -> dict[str, Any]:
+    """Merge launcher defaults with any in-pane runner updates already on disk."""
+    if not process_path.exists():
+        return base
+    try:
+        existing = json.loads(process_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return base
+    if not isinstance(existing, dict):
+        return base
+    merged = dict(base)
+    for key in (
+        "pid",
+        "pgid",
+        "status",
+        "returncode",
+        "started_at",
+        "exited_at",
+        "mode",
+        "pane_id",
+        "command",
+        "cwd",
+        "stdin_path",
+        "log_path",
+        "provider",
+    ):
+        if key not in existing:
+            continue
+        if key in {"pid", "pgid"}:
+            try:
+                value = int(existing[key] or 0)
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                merged[key] = value
+            continue
+        if key == "status":
+            existing_status = str(existing.get("status") or "")
+            base_status = str(base.get("status") or "")
+            # Prefer progressive runner states over a fresh launching stamp.
+            rank = {
+                "launching": 0,
+                "running": 1,
+                "exited": 2,
+            }
+            if rank.get(existing_status, -1) >= rank.get(base_status, -1):
+                merged[key] = existing_status
+            continue
+        if existing[key] is not None:
+            merged[key] = existing[key]
+    if "updated_at" in existing:
+        try:
+            existing_updated = float(existing["updated_at"])
+            base_updated = float(base.get("updated_at") or 0)
+            merged["updated_at"] = max(existing_updated, base_updated)
+        except (TypeError, ValueError):
+            merged["updated_at"] = base.get("updated_at")
+    return merged
+
+
 def _write_prompt(
     config: ProjectConfig,
     package: WorkPackage,
@@ -826,10 +888,11 @@ def launch_task(
         agent_id=agent.agent_id if agent is not None else None,
         provider=provider,
     )
+    process_path = _process_path(config, str(task["id"]))
     if pane_id:
         managed = launch_tmux_managed(
             command,
-            pid_path=_process_path(config, str(task["id"])),
+            pid_path=process_path,
             script_path=_tmux_script_path(config, str(task["id"]), attempt),
             pane_id=pane_id,
             provider=provider,
@@ -837,27 +900,37 @@ def launch_task(
     else:
         managed = launch_managed(
             command,
-            pid_path=_process_path(config, str(task["id"])),
+            pid_path=process_path,
         )
-    process_payload = {
-        "pid": managed.pid,
-        "pgid": managed.pgid,
-        "command": list(managed.command),
-        "cwd": str(command.cwd),
-        "stdin_path": str(command.stdin_path) if command.stdin_path else None,
-        "log_path": str(managed.log_path),
-        "provider": provider,
-        "status": "running" if not pane_id else "launching",
-        "started_at": time.time(),
-        "updated_at": time.time(),
-    }
-    if pane_id:
-        process_payload.update(
-            {"mode": "tmux", "pane_id": pane_id, "status": "launching"}
-        )
-    process_path = _process_path(config, str(task["id"]))
+    # Prefer process metadata already written by the launcher/runner. Do not
+    # clobber in-pane pid/status updates with a zeroed "launching" record.
+    process_payload = _merge_process_launch_record(
+        process_path,
+        {
+            "pid": managed.pid,
+            "pgid": managed.pgid,
+            "command": list(managed.command),
+            "cwd": str(command.cwd),
+            "stdin_path": str(command.stdin_path) if command.stdin_path else None,
+            "log_path": str(managed.log_path),
+            "provider": provider,
+            "status": "running" if not pane_id else "launching",
+            "started_at": time.time(),
+            "updated_at": time.time(),
+            **(
+                {"mode": "tmux", "pane_id": pane_id, "status": "launching"}
+                if pane_id
+                else {}
+            ),
+        },
+    )
     process_path.write_text(json.dumps(process_payload, indent=2), encoding="utf-8")
-    transition_task(config.runtime_directory, task, "running", {"pid": managed.pid})
+    transition_task(
+        config.runtime_directory,
+        task,
+        "running",
+        {"pid": int(process_payload.get("pid") or managed.pid or 0)},
+    )
     append_event(
         config.runtime_directory,
         "task_launched",

@@ -28,12 +28,14 @@ Pane identifiers are persisted under:
 
 ## Process Model
 
-Worker panes are visible execution shells. The controller can send exact
-provider CLI commands into assigned panes, write process metadata under
-`.lfg-runtime/processes/`, and tee output to task logs.
+Worker panes start as **idle shells** (not interactive provider TUIs). When LFG
+assigns a task, the controller injects a runner that executes the real batch
+provider command in that pane (for example `codex exec ...`), streams output
+live in the pane, and tees the same stream to the task log under
+`.lfg-runtime/logs/`.
 
-This makes provider work visible, debuggable, and recoverable. The durable
-truth still lives in LFG runtime state and Git.
+Headless process launch is only a fallback when the pane is missing/dead or
+tmux injection fails. Durable truth still lives in LFG runtime state and Git.
 
 ## Attach And Stop
 

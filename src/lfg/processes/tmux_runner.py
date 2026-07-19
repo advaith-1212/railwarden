@@ -10,7 +10,6 @@ from lfg.processes.supervisor import ManagedCommand, ManagedProcess, coerce_comm
 from lfg.processes.supervisor import launch_managed
 from lfg.tmux.session import pane_alive, tmux
 from lfg.util.atomic import atomic_write_json, atomic_write_text
-from lfg.workers.pane_runtime import task_pane_command
 
 
 def pane_map(runtime_dir: Path) -> dict[str, str]:
@@ -52,6 +51,15 @@ def launch_tmux_managed(
     pane_id: str,
     provider: str,
 ) -> ManagedProcess:
+    """Run a provider command in a worker pane so output is visible.
+
+    Always prefers the pane: writes a small runner script, clears the idle shell
+    line, and ``send-keys`` ``bash <script>``. The script streams provider
+    stdout/stderr to both the pane and the task log.
+
+    Headless ``launch_managed`` is only used when the pane is dead or tmux
+    injection fails.
+    """
     managed_command = coerce_command(command, cwd=cwd, log_path=log_path)
     managed_command.log_path.parent.mkdir(parents=True, exist_ok=True)
     script_path.parent.mkdir(parents=True, exist_ok=True)
@@ -72,27 +80,27 @@ def launch_tmux_managed(
         "updated_at": time.time(),
     }
     atomic_write_json(pid_path, payload)
-    pane_command = task_pane_command(
-        argv=managed_command.argv,
-        cwd=managed_command.cwd,
-        log_path=managed_command.log_path,
-    )
     if not pane_alive(pane_id):
         return launch_managed(
             managed_command,
             pid_path=pid_path,
         )
     try:
-        if managed_command.stdin_path is not None:
-            atomic_write_text(script_path, _script(managed_command, pid_path, provider))
-            script_path.chmod(0o700)
-            tmux(
-                ["send-keys", "-t", pane_id, f"bash {shlex.quote(str(script_path))}", "C-m"]
-            )
-        else:
-            tmux(["send-keys", "-t", pane_id, "C-c"], check=False)
-            tmux(["send-keys", "-t", pane_id, "C-c"], check=False)
-            tmux(["send-keys", "-t", pane_id, "C-u", pane_command, "C-m"])
+        atomic_write_text(script_path, _visible_runner_script(managed_command, pid_path, provider))
+        script_path.chmod(0o700)
+        # Idle panes are shells; interrupt any prior task and clear the line.
+        tmux(["send-keys", "-t", pane_id, "C-c"], check=False)
+        tmux(["send-keys", "-t", pane_id, "C-c"], check=False)
+        tmux(
+            [
+                "send-keys",
+                "-t",
+                pane_id,
+                "C-u",
+                f"bash {shlex.quote(str(script_path))}",
+                "C-m",
+            ]
+        )
     except subprocess.CalledProcessError:
         return launch_managed(
             managed_command,
@@ -106,11 +114,12 @@ def launch_tmux_managed(
     )
 
 
-def _script(
+def _visible_runner_script(
     command: ManagedCommand,
     pid_path: Path,
     provider: str,
 ) -> str:
+    """Bash entry that runs the provider in-pane with live output + log tee."""
     payload = {
         "argv": list(command.argv),
         "cwd": str(command.cwd),
@@ -156,17 +165,20 @@ stdin_handle = None
 if payload["stdin_path"]:
     stdin_handle = pathlib.Path(payload["stdin_path"]).open("r", encoding="utf-8")
 
+banner = f"[LFG] starting {{payload['provider']}}: {{payload['argv']}}\\n"
+sys.stdout.write(banner)
+sys.stdout.flush()
 with log_path.open("a", encoding="utf-8") as log:
-    log.write(f"[LFG] starting {{payload['provider']}}: {{payload['argv']}}\\n")
+    log.write(banner)
     log.flush()
     process = subprocess.Popen(
         payload["argv"],
         cwd=payload["cwd"],
         stdin=stdin_handle,
-        stdout=log,
+        stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
-        start_new_session=True,
+        bufsize=1,
         env=env,
     )
     if stdin_handle is not None:
@@ -181,7 +193,17 @@ with log_path.open("a", encoding="utf-8") as log:
         pgid=pgid,
         started_at=time.time(),
     )
+    assert process.stdout is not None
+    for line in process.stdout:
+        sys.stdout.write(line)
+        sys.stdout.flush()
+        log.write(line)
+        log.flush()
     rc = process.wait()
+    footer = f"[LFG] {{payload['provider']}} exited with {{rc}}\\n"
+    sys.stdout.write(footer)
+    sys.stdout.flush()
+    log.write(footer)
     write_state(
         status="exited",
         pid=process.pid,
@@ -189,50 +211,6 @@ with log_path.open("a", encoding="utf-8") as log:
         returncode=rc,
         exited_at=time.time(),
     )
-    log.write(f"[LFG] {{payload['provider']}} exited with {{rc}}\\n")
 sys.exit(rc)
 PY
 """
-
-
-def _python_update(
-    pid_path: Path,
-    payload: dict[str, object],
-    *,
-    pid_expr: str | None = None,
-    pgid_expr: str | None = None,
-    returncode_expr: str | None = None,
-) -> str:
-    body = dict(payload)
-    body["updated_at"] = time.time()
-    json_payload = json.dumps(body)
-    env_parts: list[str] = []
-    if pid_expr:
-        env_parts.append(f'LFG_PID_VALUE="${{{pid_expr}}}"')
-    if pgid_expr:
-        env_parts.append(f'LFG_PGID_VALUE="${{{pgid_expr}}}"')
-    if returncode_expr:
-        env_parts.append(f'LFG_RETURNCODE_VALUE="${{{returncode_expr}}}"')
-    prefix = " ".join(env_parts)
-    command = f"{prefix} python3 - <<'PY'" if prefix else "python3 - <<'PY'"
-    lines = [
-        command,
-        "import json, pathlib",
-        "import os",
-        f"path = pathlib.Path({str(pid_path)!r})",
-        f"payload = json.loads({json_payload!r})",
-    ]
-    if pid_expr:
-        lines.append("payload['pid'] = int(os.environ['LFG_PID_VALUE'])")
-    if pgid_expr:
-        lines.append("payload['pgid'] = int(os.environ['LFG_PGID_VALUE'])")
-    if returncode_expr:
-        lines.append("payload['returncode'] = int(os.environ['LFG_RETURNCODE_VALUE'])")
-    lines.extend(
-        [
-            "path.parent.mkdir(parents=True, exist_ok=True)",
-            "path.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\\n')",
-            "PY",
-        ]
-    )
-    return "\n".join(lines)

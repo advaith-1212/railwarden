@@ -348,8 +348,15 @@ def test_tmux_launch_layout_has_factory_and_observability(git_repo: Path) -> Non
     )
     assert any("role=coder exec=codex provider=codex" in spec.title for spec in specs)
     assert any("lfg observability" in spec.command for spec in specs)
-    assert any("&& codex" in spec.command for spec in specs)
-    assert not any("exec codex" in spec.command for spec in specs)
+    coder_specs = [spec for spec in specs if "role=coder" in spec.title]
+    assert coder_specs
+    for spec in coder_specs:
+        assert "exec ${SHELL:-/bin/sh}" in spec.command
+        assert "idle shell" in spec.command
+        # Must not open interactive provider TUIs at idle (breaks task inject).
+        assert "&& codex" not in spec.command
+        assert "agy --dangerously-skip-permissions" not in spec.command
+        assert "&& grok" not in spec.command
     assert all("set -a;" in spec.command for spec in specs if spec.window == "factory")
     assert not any("lfg worker codex" in spec.command for spec in specs)
     assert any(spec.window == "observability" and "lfg controller" in spec.command for spec in specs)
