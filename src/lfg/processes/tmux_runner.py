@@ -12,6 +12,19 @@ from lfg.tmux.session import pane_alive, tmux
 from lfg.util.atomic import atomic_write_json, atomic_write_text
 
 
+# Never inject worker tasks into control/orchestration panes.
+_CONTROL_PANE_KEYS = frozenset(
+    {
+        "hermes",
+        "controller",
+        "observability",
+        "status",
+        "factory",
+        "monitor",
+    }
+)
+
+
 def pane_map(runtime_dir: Path) -> dict[str, str]:
     path = runtime_dir / "state" / "tmux-session.json"
     if not path.exists():
@@ -28,9 +41,20 @@ def pane_for_worker(
 ) -> str | None:
     panes = pane_map(runtime_dir)
     candidates: list[str] = []
-    if agent_id and agent_id in panes:
+    if (
+        agent_id
+        and agent_id not in _CONTROL_PANE_KEYS
+        and agent_id in panes
+    ):
         candidates.append(panes[agent_id])
-    candidates.extend(pane for key, pane in panes.items() if key.startswith(provider))
+    if provider:
+        for key, pane in panes.items():
+            if key in _CONTROL_PANE_KEYS:
+                continue
+            if key == provider or key.startswith(f"{provider}-") or key.startswith(
+                provider
+            ):
+                candidates.append(pane)
     seen: set[str] = set()
     for pane in candidates:
         if pane in seen:

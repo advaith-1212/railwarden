@@ -224,10 +224,37 @@ def cmd_approve(args: argparse.Namespace) -> int:
 
 
 def cmd_start(args: argparse.Namespace) -> int:
+    """Start the tmux factory.
+
+    Prefer the v2 Hermes + worker layout when a session profile already exists
+    (the normal case after ``lfg launch``). Only fall back to the legacy pane
+    layout when there is no saved profile.
+    """
     _, files = configured_project(Path.cwd())
-    name = create_session(files.project, attach=not args.no_attach)
+    profile_path = files.project.runtime_directory / "state" / "session-profile.json"
+    if profile_path.exists():
+        profile = load_session_profile(files.project)
+        hermes_profile = generate_hermes_profile(files.project, profile)
+        name = create_session(
+            files.project,
+            attach=not args.no_attach,
+            profile=profile,
+            hermes_profile=hermes_profile,
+        )
+    else:
+        name = create_session(files.project, attach=not args.no_attach)
     print(f"Started LFG session: {name}")
     return 0
+
+
+def cmd_restart(args: argparse.Namespace) -> int:
+    """Stop and recreate the factory using the same path as ``lfg start``.
+
+    Uses the saved session profile + Hermes runtime when present, so restart
+    does not drop back to the legacy ``lfg hermes`` help pane.
+    """
+    cmd_stop(args)
+    return cmd_start(args)
 
 
 def _prompt(default: str, label: str, *, hint: str = "") -> str:
@@ -2236,9 +2263,12 @@ def build_parser() -> argparse.ArgumentParser:
     launch.set_defaults(func=cmd_launch)
     sub.add_parser("attach").set_defaults(func=cmd_attach)
     sub.add_parser("stop").set_defaults(func=cmd_stop)
-    restart = sub.add_parser("restart")
+    restart = sub.add_parser(
+        "restart",
+        help="Stop and recreate the LFG tmux session (prefers v2 Hermes layout).",
+    )
     restart.add_argument("--no-attach", action="store_true")
-    restart.set_defaults(func=lambda args: (cmd_stop(args), cmd_start(args))[1])
+    restart.set_defaults(func=cmd_restart)
     integrate = sub.add_parser("integrate")
     integrate.add_argument("--execute", action="store_true")
     integrate.set_defaults(func=cmd_integrate)

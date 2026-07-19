@@ -45,5 +45,10 @@ lfg stop
 lfg restart
 ```
 
+`lfg restart` (and `lfg start` when a session profile already exists) recreate
+the **v2** factory layout: Hermes interactive chat on the left, idle worker
+shells on the right, observability window separate. Do not use a bare
+`lfg hermes` pane — that only prints CLI help.
+
 Use `lfg events`, `lfg dashboard`, and `lfg observability` to inspect state
 instead of relying only on pane contents.

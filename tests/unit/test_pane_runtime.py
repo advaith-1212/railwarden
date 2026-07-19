@@ -7,7 +7,12 @@ from unittest.mock import MagicMock
 from lfg.config.init import initialize_project
 from lfg.config.loader import load_project_files
 from lfg.processes.supervisor import ManagedCommand
-from lfg.processes.tmux_runner import _visible_runner_script, launch_tmux_managed
+from lfg.processes.tmux_runner import (
+    _visible_runner_script,
+    launch_tmux_managed,
+    pane_for_worker,
+)
+from lfg.util.atomic import atomic_write_json
 from lfg.providers.adapters import default_adapters
 from lfg.runtime.session import load_session_profile
 from lfg.workers.pane_runtime import idle_pane_command, task_pane_command
@@ -64,6 +69,91 @@ def test_visible_runner_streams_to_stdout_and_log(tmp_path: Path) -> None:
     assert "subprocess.PIPE" in script
     assert "start_new_session" not in script
     assert '"echo", "hello-from-provider"' in script
+
+
+def test_cmd_start_uses_v2_layout_when_session_profile_exists(
+    git_repo: Path, monkeypatch
+) -> None:
+    from lfg.cli import main as cli_main
+    from lfg.config.init import initialize_project
+    from lfg.config.loader import load_project_files
+    from lfg.hermes.profile import generate_hermes_profile
+    from lfg.runtime.session import load_session_profile, save_session_profile
+
+    initialize_project(git_repo, yes=True)
+    files = load_project_files(git_repo)
+    profile = load_session_profile(files.project)
+    save_session_profile(files.project, profile)
+    generate_hermes_profile(files.project, profile)
+
+    captured: dict[str, object] = {}
+
+    def fake_create_session(config, *, attach, profile=None, hermes_profile=None):
+        captured["profile"] = profile
+        captured["hermes_profile"] = hermes_profile
+        captured["attach"] = attach
+        return "test-session"
+
+    monkeypatch.chdir(git_repo)
+    monkeypatch.setattr(cli_main, "create_session", fake_create_session)
+    assert cli_main.main(["start", "--no-attach"]) == 0
+    assert captured["profile"] is not None
+    assert captured["hermes_profile"] is not None
+
+
+def test_cmd_restart_stops_then_starts_with_v2(
+    git_repo: Path, monkeypatch
+) -> None:
+    from lfg.cli import main as cli_main
+    from lfg.config.init import initialize_project
+    from lfg.config.loader import load_project_files
+    from lfg.runtime.session import load_session_profile, save_session_profile
+
+    initialize_project(git_repo, yes=True)
+    files = load_project_files(git_repo)
+    save_session_profile(files.project, load_session_profile(files.project))
+
+    order: list[str] = []
+    monkeypatch.chdir(git_repo)
+    monkeypatch.setattr(
+        cli_main,
+        "cmd_stop",
+        lambda _args: order.append("stop") or 0,
+    )
+    monkeypatch.setattr(
+        cli_main,
+        "cmd_start",
+        lambda _args: order.append("start") or 0,
+    )
+    assert cli_main.main(["restart", "--no-attach"]) == 0
+    assert order == ["stop", "start"]
+
+
+def test_pane_for_worker_never_selects_hermes_or_control_panes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runtime = tmp_path / ".lfg-runtime"
+    state = runtime / "state"
+    state.mkdir(parents=True)
+    atomic_write_json(
+        state / "tmux-session.json",
+        {
+            "session": "test",
+            "panes": {
+                "hermes": "%1",
+                "controller": "%0",
+                "observability": "%5",
+                "codex-1": "%2",
+                "codex": "%9",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "lfg.processes.tmux_runner.pane_alive", lambda pane: pane in {"%1", "%0", "%2"}
+    )
+    assert pane_for_worker(runtime, agent_id="hermes", provider="codex") == "%2"
+    assert pane_for_worker(runtime, agent_id=None, provider="codex") == "%2"
+    assert pane_for_worker(runtime, agent_id="controller", provider="") is None
 
 
 def test_launch_tmux_managed_falls_back_when_pane_dead(
