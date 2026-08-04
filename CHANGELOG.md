@@ -4,6 +4,11 @@ All notable changes are documented here following Keep a Changelog principles. T
 
 ## [Unreleased]
 
+### Fixed
+
+- Reap exited managed POSIX process-group leaders before probing group liveness,
+  preventing false termination failures and unnecessary waits in Linux CI.
+
 ### Added
 
 - Deterministic credential-free demo and acceptance report.

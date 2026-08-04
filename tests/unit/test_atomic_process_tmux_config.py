@@ -43,7 +43,9 @@ def test_unrelated_process_untouched(tmp_path: Path) -> None:
             log_path=tmp_path / "p.log",
             pid_path=tmp_path / "p.json",
         )
-        terminate_process_group(proc.pgid)
+        started = time.monotonic()
+        assert terminate_process_group(proc.pgid)
+        assert time.monotonic() - started < 1.0
         assert other.poll() is None
     finally:
         other.terminate()

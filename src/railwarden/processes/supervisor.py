@@ -156,6 +156,13 @@ def terminate_process_group(pgid: int, *, timeout: float = 5.0) -> bool:
         return True
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        # ``killpg(pgid, 0)`` still succeeds for an exited child that remains a
+        # zombie. Reap the process-group leader when it is our child before
+        # probing the group, so an otherwise empty group is observed as gone.
+        try:
+            os.waitpid(pgid, getattr(os, "WNOHANG", 1))
+        except ChildProcessError:
+            pass
         try:
             kill_group(pgid, 0)
         except ProcessLookupError:
@@ -167,4 +174,17 @@ def terminate_process_group(pgid: int, *, timeout: float = 5.0) -> bool:
         kill_group(pgid, getattr(signal, "SIGKILL", signal.SIGTERM))
     except ProcessLookupError:
         return True
+    kill_deadline = time.monotonic() + timeout
+    while time.monotonic() < kill_deadline:
+        try:
+            os.waitpid(pgid, getattr(os, "WNOHANG", 1))
+        except ChildProcessError:
+            pass
+        try:
+            kill_group(pgid, 0)
+        except ProcessLookupError:
+            return True
+        except PermissionError:
+            return True
+        time.sleep(0.1)
     return False
