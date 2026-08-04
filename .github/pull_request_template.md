@@ -1,15 +1,18 @@
 ## Summary
 
-## Motivation
+<!-- Briefly explain the change and why it is needed. -->
 
-## Affected contracts and compatibility impact
+## Validation
 
-## Migration impact
+<!-- List the commands or checks you ran. -->
 
-## Tests and validation
+## Risk and rollback
 
-## Documentation
+<!-- Describe notable risk, or write “None”. Explain how to roll back if needed. -->
 
-## Security implications
+## Checklist
 
-## Screenshots or logs (if relevant)
+- [ ] Scope is limited to this pull request
+- [ ] Relevant tests or checks were run
+- [ ] Documentation is updated if needed
+- [ ] This PR is ready for human review
