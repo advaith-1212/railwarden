@@ -43,6 +43,7 @@ from railwarden.providers.adapters import default_adapters
 from railwarden.runtime.checkpoints import create_checkpoint_commit
 from railwarden.runtime.context import context_status, write_context_file
 from railwarden.runtime.decisions import inspect_failure, record_decision
+from railwarden.runtime.demo import run_demo, seed_demo
 from railwarden.runtime.doctor import doctor_report
 from railwarden.runtime.events import read_events
 from railwarden.runtime.handoff import create_handoff_packet
@@ -104,6 +105,10 @@ def default_legacy_source(target: Path, explicit_source: str | None) -> Path:
 
 def cmd_init(args: argparse.Namespace) -> int:
     root = discover_repo(Path.cwd())
+    # The demo is explicitly a setup operation; let the documented concise
+    # `warden init --demo` path opt into the same writes as `--yes`.
+    if args.demo:
+        args.yes = True
     if not args.yes:
         result = initialize_project(root, yes=False)
         print("RailWarden project setup preview")
@@ -120,6 +125,8 @@ def cmd_init(args: argparse.Namespace) -> int:
         print("Run `warden init --yes` to write these files.")
         return 0
     result = initialize_project(root, yes=True)
+    if args.demo:
+        marker = seed_demo(root)
     print("RailWarden project initialized")
     print()
     for key in ("config", "work_packages", "validation", "state_schema"):
@@ -127,11 +134,28 @@ def cmd_init(args: argparse.Namespace) -> int:
             print(f"{key.replace('_', ' ').title()}: {result[key]}")
     print()
     print("Next steps:")
+    if args.demo:
+        print(f"  Demo plan: {marker}")
+        print(
+            "  Run `warden demo run` for a deterministic, credential-free acceptance run."
+        )
     print(
         "  1. Run `warden doctor` to check Hermes, tmux, providers, MCP, and runtime ignore rules."
     )
     print("  2. Run `warden launch` to start the factory tmux session.")
     print("  3. Tell Hermes what to build in the factory window.")
+    return 0
+
+
+def cmd_demo(args: argparse.Namespace) -> int:
+    if args.demo_command != "run":
+        raise RailWardenError("Only `warden demo run` is supported")
+    root = discover_repo(Path.cwd())
+    try:
+        report = run_demo(root)
+    except (RuntimeError, ValueError) as exc:
+        raise RailWardenError(str(exc)) from exc
+    print(json.dumps(report, indent=2, sort_keys=True, default=str))
     return 0
 
 
@@ -2227,7 +2251,15 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
     init = sub.add_parser("init")
     init.add_argument("--yes", action="store_true")
+    init.add_argument(
+        "--demo",
+        action="store_true",
+        help="Initialize and seed the deterministic demo plan.",
+    )
     init.set_defaults(func=cmd_init)
+    demo = sub.add_parser("demo", help="Run deterministic demo/test infrastructure.")
+    demo.add_argument("demo_command", choices=["run"])
+    demo.set_defaults(func=cmd_demo)
     setup = sub.add_parser("setup")
     setup.add_argument("--yes", action="store_true")
     setup.set_defaults(func=cmd_setup)

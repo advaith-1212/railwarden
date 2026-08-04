@@ -1,0 +1,6 @@
+name: Documentation improvement
+description: Improve public or contributor documentation
+labels: [documentation]
+body:
+  - type: textarea
+    attributes: {label: Improvement, description: What is unclear and where?}

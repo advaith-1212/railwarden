@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Synchronize locked environment
+        run: uv sync --frozen
+      - name: Format, lint, and type check
+        run: |
+          uv run ruff format --check .
+          uv run ruff check .
+          uv run mypy
+      - name: Unit, contract, and integration tests with coverage
+        run: uv run pytest --cov=railwarden --cov-report=term-missing
+      - name: Build distributions
+        run: uv build
+      - name: Install built wheel in a fresh environment
+        run: |
+          python -m venv .wheel-venv
+          .wheel-venv/bin/pip install dist/*.whl
+          .wheel-venv/bin/warden --help
+          .wheel-venv/bin/warden version
+          .wheel-venv/bin/warden doctor
+          .wheel-venv/bin/python -c "import railwarden"
+      - name: Verify runtime safety and deterministic acceptance
+        run: |
+          git check-ignore -q .railwarden-runtime/probe
+          git check-ignore -q .railwarden-worktrees/probe
+          uv run pytest tests/integration/test_disposable_repo.py tests/e2e/test_demo_acceptance.py

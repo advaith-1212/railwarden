@@ -1,0 +1,8 @@
+name: Provider adapter proposal
+description: Propose a tested provider integration
+labels: [provider]
+body:
+  - type: textarea
+    attributes: {label: Adapter contract, description: Process lifecycle, auth, timeout, normalized results, and failures.}
+  - type: textarea
+    attributes: {label: Test plan, description: Include credential-free fake-provider coverage.}

@@ -1,0 +1,8 @@
+name: Feature request
+description: Propose a scoped capability
+labels: [enhancement]
+body:
+  - type: textarea
+    attributes: {label: Problem, description: What controlled workflow gap does this solve?}
+  - type: textarea
+    attributes: {label: Proposal, description: Include kernel, contract, and compatibility impact.}

@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://railwarden.local/contracts/validation-result","type":"object","required":["schema_version","name","status","command"],"properties":{"schema_version":{"type":"string"},"name":{"type":"string"},"status":{"enum":["passed","failed"]},"command":{"type":"array","items":{"type":"string"}}}}

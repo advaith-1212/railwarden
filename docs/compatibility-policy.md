@@ -1,0 +1,5 @@
+# Compatibility policy
+
+RailWarden is pre-1.0 and uses semantic versioning: patch releases fix compatible defects, minor releases may add features or deprecate behavior, and clearly documented breaking changes use a major pre-1.0 compatibility decision. Breaking changes include removing/renaming a CLI command or required option, changing an exit code or required machine-readable field, invalidating config/runtime-state/schema data without a migration, or changing a supported adapter contract.
+
+Deprecations include a warning, a documented replacement, and a migration path when feasible. Config, runtime state, schemas, and MCP contracts declare versions; consumers should reject unsupported versions rather than guess. Python 3.12 is supported. Windows, macOS, and Linux are intended targets for core Git/Python mechanics; tmux support is optional and platform-dependent. Provider support depends on the installed adapter and provider behavior, not a universal compatibility guarantee. Security fixes may be released out of cycle.

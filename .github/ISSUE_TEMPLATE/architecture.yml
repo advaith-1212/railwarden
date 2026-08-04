@@ -1,0 +1,8 @@
+name: Architecture proposal
+description: Propose a kernel or boundary change
+labels: [contracts, runtime]
+body:
+  - type: textarea
+    attributes: {label: Decision, description: Problem, alternatives, invariants, and dependency direction.}
+  - type: textarea
+    attributes: {label: Compatibility, description: Contract, migration, evidence, and security impact.}

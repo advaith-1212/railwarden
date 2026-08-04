@@ -30,6 +30,10 @@ TASK_STATES = {
     "failed",
 }
 
+# A terminal task must never be silently resurrected. Other transitions remain
+# intentionally controller-driven while the pre-1.0 lifecycle matures.
+TERMINAL_TASK_STATES = {"merged", "rejected"}
+
 
 def task_id_for_package(package_id: str) -> str:
     return f"task-{package_id}"
@@ -93,6 +97,8 @@ def transition_task(
     if status not in TASK_STATES:
         raise ValueError(f"Unknown task status: {status}")
     old = str(task.get("status", ""))
+    if old in TERMINAL_TASK_STATES and status != old:
+        raise ValueError(f"Cannot transition terminal task from {old} to {status}")
     task["status"] = status
     task["updated_at"] = time.time()
     if payload:

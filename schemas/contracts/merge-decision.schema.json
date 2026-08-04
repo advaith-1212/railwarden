@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://railwarden.local/contracts/merge-decision","type":"object","required":["schema_version","package_id","decision","evidence"],"properties":{"schema_version":{"type":"string"},"package_id":{"type":"string"},"decision":{"enum":["approved","rejected"]},"evidence":{"type":"array"}}}

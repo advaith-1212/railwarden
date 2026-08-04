@@ -1,66 +1,19 @@
-# Contributing
+# Contributing to RailWarden
 
-RailWarden is an experimental multi-agent software-development runtime. Contributions
-should preserve the core authority split:
+Thank you for improving RailWarden. Start with [DEVELOPMENT.md](DEVELOPMENT.md), [ARCHITECTURE.md](ARCHITECTURE.md), and the [contract index](docs/contracts/README.md).
 
-```text
-RailWarden owns durable state and mechanics.
-Hermes owns decisions.
-Workers own scoped implementation.
-```
+## Contribution workflow
 
-## Local Setup
+Keep changes scoped, preserve the kernel boundary, add tests at the lowest useful layer, and run format, lint, typing, tests, and a build before opening a pull request. Include documentation whenever behavior, CLI output, configuration, contracts, provider behavior, or safety expectations change.
 
-```bash
-git clone https://github.com/advaith-1212/railwarden.git
-cd railwarden
-uv sync
-uv run warden --help
-```
+## Invariants
 
-Optional editable install:
+- Durable runtime state, not agent chat, is authoritative for execution facts.
+- Workers operate in scoped worktrees and cannot self-certify integration.
+- Path ownership, validation evidence, and merge gates are mechanical controls.
+- Hermes remains the recommended supervisor; do not imply supervisor neutrality.
+- Never commit credentials, generated runtime state, or generated worktrees.
 
-```bash
-uv tool install --editable .
-```
+Contract changes need schema fixtures, compatibility analysis, and migration documentation. Breaking changes need release-authority review. Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md); do not open a public issue for a suspected secret or vulnerability.
 
-## Before Submitting Changes
-
-```bash
-uv run ruff format --check .
-uv run ruff check .
-uv run mypy
-uv run pytest
-```
-
-For CLI behavior changes, also run the relevant help or smoke command:
-
-```bash
-uv run warden --help
-uv run warden doctor
-```
-
-## What To Be Careful With
-
-- Do not make Hermes Kanban the authoritative database for RailWarden state.
-- Do not store runtime truth in prose-only artifacts.
-- Do not commit `.railwarden-runtime/`, worker logs, result JSON, local secrets, or
-  worktrees.
-- Do not let workers bypass owned-path validation.
-- Do not treat worker-reported success as verified until RailWarden validates it.
-- Do not require live provider credentials in ordinary unit tests.
-
-## Documentation Changes
-
-When changing orchestration behavior, update:
-
-- `README.md`
-- `docs/architecture.md`
-- `docs/runtime-protocol.md`
-- `docs/cli.md`
-- any provider, security, context, or recovery docs affected by the change
-
-## Security
-
-Never commit raw credentials. If a credential is accidentally committed, rotate
-it even if the later commit removes it.
+Pull requests should state motivation, tests, docs, contract/compatibility/migration impact, and security implications. See the repository PR template and [governance](docs/governance.md).

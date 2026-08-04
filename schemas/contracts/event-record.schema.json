@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://railwarden.local/contracts/event-record","type":"object","required":["schema_version","ts","type","payload"],"properties":{"schema_version":{"type":"string"},"ts":{"type":"number"},"type":{"type":"string"},"task_id":{"type":["string","null"]},"payload":{"type":"object"}}}

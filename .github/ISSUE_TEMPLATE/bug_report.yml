@@ -1,0 +1,10 @@
+name: Bug report
+description: Report reproducible runtime behavior
+labels: [bug]
+body:
+  - type: textarea
+    attributes: {label: What happened?, description: Include expected behavior and redacted logs.}
+  - type: textarea
+    attributes: {label: Reproduction, description: Include repository state, command, and steps.}
+  - type: input
+    attributes: {label: RailWarden version}

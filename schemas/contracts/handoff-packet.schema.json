@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://railwarden.local/contracts/handoff-packet","type":"object","required":["schema_version","task_id","reason","from_provider"],"properties":{"schema_version":{"type":"string"},"task_id":{"type":"string"},"reason":{"type":"string"},"from_provider":{"type":"string"},"to_provider":{"type":"string"}}}

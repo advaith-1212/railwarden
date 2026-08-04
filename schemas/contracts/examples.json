@@ -1,0 +1,10 @@
+{
+  "work-package": {"valid":{"schema_version":"1.0.0","id":"WP-1","name":"Change","objective":"Do work","dependencies":[],"owned_paths":["src/"]},"invalid":{"id":"WP-1"}},
+  "task-state": {"valid":{"schema_version":"1.0.0","id":"task-WP-1","package_id":"WP-1","status":"ready","dependencies":[]},"invalid":{"schema_version":"1.0.0","id":"task-WP-1"}},
+  "worker-result": {"valid":{"schema_version":"1.0.0","task_id":"task-WP-1","worker":"fake","model":"fake","status":"completed","summary":"done"},"invalid":{"task_id":"task-WP-1"}},
+  "validation-result": {"valid":{"schema_version":"1.0.0","name":"pytest","status":"passed","command":["pytest"]},"invalid":{"schema_version":"1.0.0","name":"pytest","status":"unknown","command":[]}},
+  "event-record": {"valid":{"schema_version":"1.0.0","ts":1.0,"type":"task_created","payload":{}},"invalid":{"schema_version":"1.0.0","type":"task_created","payload":{}}},
+  "handoff-packet": {"valid":{"schema_version":"1.0.0","task_id":"task-WP-1","reason":"quota","from_provider":"codex"},"invalid":{"schema_version":"1.0.0","task_id":"task-WP-1"}},
+  "merge-decision": {"valid":{"schema_version":"1.0.0","package_id":"WP-1","decision":"approved","evidence":[]},"invalid":{"schema_version":"1.0.0","package_id":"WP-1","decision":"maybe","evidence":[]}},
+  "supervisor-action": {"valid":{"schema_version":"1.0.0","task_id":"task-WP-1","action":"retry_same_provider","rationale":"transient"},"invalid":{"schema_version":"1.0.0","task_id":"task-WP-1","action":"retry_same_provider"}}
+}

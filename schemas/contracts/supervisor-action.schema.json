@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://railwarden.local/contracts/supervisor-action","type":"object","required":["schema_version","task_id","action","rationale"],"properties":{"schema_version":{"type":"string"},"task_id":{"type":"string"},"action":{"type":"string"},"rationale":{"type":"string"}}}
