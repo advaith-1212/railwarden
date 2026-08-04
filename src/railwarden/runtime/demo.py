@@ -103,6 +103,16 @@ def _prepare_configuration_commit(repository: Path) -> None:
         _commit(repository, "chore: configure RailWarden demo")
 
 
+def _ensure_demo_identity(repository: Path) -> None:
+    """Ensure disposable demo merges do not depend on a host Git identity."""
+    name = run_git(repository, "config", "--get", "user.name", check=False)
+    email = run_git(repository, "config", "--get", "user.email", check=False)
+    if not name.stdout.strip():
+        run_git(repository, "config", "user.name", "RailWarden demo")
+    if not email.stdout.strip():
+        run_git(repository, "config", "user.email", "demo@railwarden.invalid")
+
+
 def _worker_commit(worktree: Path, filename: str, text: str, message: str) -> str:
     target = worktree / "demo" / filename
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -116,6 +126,7 @@ def run_demo(repository: Path) -> dict[str, Any]:
     marker = repository / ".railwarden" / DEMO_MARKER
     if not marker.exists():
         raise ValueError("Run `warden init --demo` before `warden demo run`.")
+    _ensure_demo_identity(repository)
     _prepare_configuration_commit(repository)
     files = load_project_files(repository)
     runtime = files.project.runtime_directory
