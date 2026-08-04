@@ -1,19 +1,19 @@
 # Planning
 
 Planning belongs to Hermes and the architect agent, but the approved plan must
-be written back into LFG-owned contracts before execution.
+be written back into RailWarden-owned contracts before execution.
 
 ## Responsibilities
 
 Hermes:
 
 - receives the user's goal
-- asks LFG for repository/config/runtime context
+- asks RailWarden for repository/config/runtime context
 - calls an architect agent
 - synthesizes the architecture and work-package proposal
 - explains the plan to the user
 - asks for approval
-- freezes approved work through LFG tools
+- freezes approved work through RailWarden tools
 
 Architect agent:
 
@@ -24,7 +24,7 @@ Architect agent:
 - recommends dependencies and parallelism
 - drafts context files when needed
 
-LFG:
+RailWarden:
 
 - persists the approved package contracts
 - validates the dependency DAG
@@ -49,9 +49,9 @@ A useful plan should include:
 
 ## Approval Gate
 
-LFG should not dispatch workers until the plan is approved and frozen. The
+RailWarden should not dispatch workers until the plan is approved and frozen. The
 approval boundary prevents workers from implementing moving targets and gives
-LFG a deterministic contract to enforce.
+RailWarden a deterministic contract to enforce.
 
 ## Current Defaults
 
@@ -64,5 +64,5 @@ planning:
   approval_required: true
 ```
 
-Use `lfg doctor` to verify whether the configured planner is installed and
+Use `warden doctor` to verify whether the configured planner is installed and
 usable.

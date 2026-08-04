@@ -1,15 +1,15 @@
 # Security
 
-LFG coordinates agents that can edit code, launch processes, and call provider
+RailWarden coordinates agents that can edit code, launch processes, and call provider
 CLIs. Treat it as a local automation runtime with explicit trust boundaries.
 
 ## Tracked Versus Ignored
 
 Tracked:
 
-- `.lfg/project.yaml`
-- `.lfg/work_packages.yaml`
-- `.lfg/validation.yaml`
+- `.railwarden/project.yaml`
+- `.railwarden/work_packages.yaml`
+- `.railwarden/validation.yaml`
 - context files
 - documentation
 - source and tests
@@ -17,8 +17,8 @@ Tracked:
 Ignored:
 
 - `.env`
-- `.lfg-runtime/`
-- `.lfg-worktrees/`
+- `.railwarden-runtime/`
+- `.railwarden-worktrees/`
 - runtime logs
 - provider transcripts
 - generated process files
@@ -40,8 +40,8 @@ env:GEMINI_API_KEY
 Runtime-only secret material may be written to ignored files such as:
 
 ```text
-~/.lfg/launch-setups.d/<setup>.json
-.lfg-runtime/secrets.env
+~/.railwarden/launch-setups.d/<setup>.json
+.railwarden-runtime/secrets.env
 ```
 
 These files should use restrictive permissions and should never be committed.
@@ -57,7 +57,7 @@ Workers should be constrained by:
 - result schema
 - merge gates
 
-LFG should verify changed files before accepting a worker result. A worker's
+RailWarden should verify changed files before accepting a worker result. A worker's
 claim is not enough.
 
 ## Public Repository Checklist

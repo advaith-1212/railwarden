@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from lfg.provisioning.worktrees import ensure_worktree
+from railwarden.provisioning.worktrees import ensure_worktree
 
 
 def run(repo: Path, *args: str) -> str:
@@ -19,14 +19,16 @@ def run(repo: Path, *args: str) -> str:
 
 @pytest.fixture()
 def repo(tmp_path: Path) -> Path:
-    subprocess.run(["git", "-C", str(tmp_path), "init"], check=True, capture_output=True)
     subprocess.run(
-        ["git", "-C", str(tmp_path), "config", "user.email", "lfg@test"],
+        ["git", "-C", str(tmp_path), "init"], check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "config", "user.email", "railwarden@test"],
         check=True,
         capture_output=True,
     )
     subprocess.run(
-        ["git", "-C", str(tmp_path), "config", "user.name", "LFG"],
+        ["git", "-C", str(tmp_path), "config", "user.name", "RailWarden"],
         check=True,
         capture_output=True,
     )
@@ -40,7 +42,7 @@ def repo(tmp_path: Path) -> Path:
 
 
 def test_ensure_worktree_removes_broken_orphan(repo: Path) -> None:
-    workspace = repo / ".lfg-worktrees" / "wp001"
+    workspace = repo / ".railwarden-worktrees" / "wp001"
     workspace.mkdir(parents=True)
     (workspace / "README.md").write_text("orphan\n", encoding="utf-8")
     (workspace / ".git").write_text(
@@ -52,11 +54,11 @@ def test_ensure_worktree_removes_broken_orphan(repo: Path) -> None:
         repository=repo,
         integration_branch="main",
         workspace=workspace,
-        branch="lfg/WP-001",
+        branch="railwarden/WP-001",
         action="execute",
     )
 
     assert result["operation"] == "create"
     assert workspace.is_dir()
     assert run(workspace, "rev-parse", "--is-inside-work-tree") == "true"
-    assert run(workspace, "branch", "--show-current") == "lfg/WP-001"
+    assert run(workspace, "branch", "--show-current") == "railwarden/WP-001"

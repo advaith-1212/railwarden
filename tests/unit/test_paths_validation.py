@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from lfg.errors import ValidationError
-from lfg.validation.paths import validate_owned_paths
+from railwarden.errors import ValidationError
+from railwarden.validation.paths import validate_owned_paths
 
 
 def test_path_ownership_validation() -> None:

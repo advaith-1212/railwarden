@@ -8,11 +8,12 @@ from pathlib import Path
 import pytest
 import yaml
 
-from lfg.config.loader import load_project_files
-from lfg.engine.controller import controller_tick
-from lfg.planning.jobs import planning_status, start_planning_job
-from lfg.planning.pipeline import approve_latest_plan
-from lfg.runtime.context import context_status
+from railwarden.config.loader import load_project_files
+from railwarden.engine.controller import controller_tick
+from railwarden.planning.jobs import planning_status, start_planning_job
+from railwarden.planning.pipeline import approve_latest_plan
+from railwarden.providers.adapters import ProviderAdapter
+from railwarden.runtime.context import context_status
 from tests.conftest import initialize_populated_project
 
 
@@ -58,7 +59,7 @@ def test_reading_tracker_factory_context_gate_and_planning_job(
         encoding="utf-8",
     )
 
-    monkeypatch.setenv("LFG_PLANNER_OUTPUT", str(fixture))
+    monkeypatch.setenv("RAILWARDEN_PLANNER_OUTPUT", str(fixture))
     files = load_project_files(git_repo)
     assert context_status(files.project, files.packages)["status"] == "ok"
 
@@ -77,11 +78,16 @@ def test_reading_tracker_factory_context_gate_and_planning_job(
     _commit(git_repo, "freeze reading tracker contracts")
 
     packages = yaml.safe_load(
-        (git_repo / ".lfg" / "work_packages.yaml").read_text(encoding="utf-8")
+        (git_repo / ".railwarden" / "work_packages.yaml").read_text(encoding="utf-8")
     )
     assert packages["work_packages"][0]["id"] == "WP-001"
     assert packages["work_packages"][0]["context_refs"]
 
-    result = controller_tick(load_project_files(git_repo), launch=False, integrate=False)
+    result = controller_tick(
+        load_project_files(git_repo),
+        adapters={"codex": ProviderAdapter("codex", "python", "test-model")},
+        launch=False,
+        integrate=False,
+    )
     assert result["status"] == "ok"
     assert result["launched"]

@@ -4,7 +4,7 @@ I was not trying to build another coding agent.
 
 I was trying to build a **reusable software-development execution system** that converts a high-level product goal into an implemented, tested, integrated codebase by coordinating multiple AI coding agents.
 
-The working name became **LFG — the agent factory**.
+The working name became **RailWarden — the agent factory**.
 
 Its purpose was:
 
@@ -20,7 +20,7 @@ The intended workflow was approximately:
 
 ```bash
 cd ~/CODE/Tmom_Deviation
-lfg launch
+warden launch
 ```
 
 Then I would tell Hermes something like:
@@ -72,7 +72,7 @@ System:
 
 ---
 
-# 2. The distinction between Hermes Agent and LFG
+# 2. The distinction between Hermes Agent and RailWarden
 
 This became the central design decision.
 
@@ -96,9 +96,9 @@ It would handle:
 
 Hermes is the interface and project manager.
 
-## LFG
+## RailWarden
 
-LFG was supposed to be the **deterministic execution engine**.
+RailWarden was supposed to be the **deterministic execution engine**.
 
 It would own:
 
@@ -122,7 +122,7 @@ It would own:
 * provider health;
 * audit logs.
 
-LFG is the operating system underneath Hermes.
+RailWarden is the operating system underneath Hermes.
 
 The final conceptual boundary was:
 
@@ -132,7 +132,7 @@ Me
 Hermes
   Human interface, reasoning, planning, intervention
  ↓
-LFG
+RailWarden
   Deterministic scheduling, execution, state, validation
  ↓
 Codex / Claude / Gemini / Grok / local models
@@ -355,7 +355,7 @@ Every package needed its own branch and worktree:
 For example:
 
 ```text
-integration/lfg-goal-0042
+integration/railwarden-goal-0042
 agent/WP-001-domain
 agent/WP-002-policy
 agent/WP-003-persistence
@@ -442,40 +442,40 @@ I wanted it to survive:
 The planned separation was:
 
 ```text
-.lfg/
+.railwarden/
   Durable project configuration, tracked when appropriate
 
-.lfg-runtime/
+.railwarden-runtime/
   Runtime state, logs, process metadata, checkpoints
 ```
 
 Possible durable files:
 
 ```text
-.lfg/project.yaml
-.lfg/factory.yaml
-.lfg/validation.yaml
+.railwarden/project.yaml
+.railwarden/factory.yaml
+.railwarden/validation.yaml
 ```
 
 Runtime state:
 
 ```text
-.lfg-runtime/goals/
-.lfg-runtime/work-packages/
-.lfg-runtime/sessions/
-.lfg-runtime/logs/
-.lfg-runtime/checkpoints/
-.lfg-runtime/provider-health/
+.railwarden-runtime/goals/
+.railwarden-runtime/work-packages/
+.railwarden-runtime/sessions/
+.railwarden-runtime/logs/
+.railwarden-runtime/checkpoints/
+.railwarden-runtime/provider-health/
 ```
 
 This allowed:
 
 ```bash
-lfg status
-lfg resume
-lfg retry WP-009
-lfg pause WP-012
-lfg agent swap agent-04 --to anthropic/claude-sonnet
+warden status
+warden resume
+warden retry WP-009
+warden pause WP-012
+warden agent swap agent-04 --to anthropic/claude-sonnet
 ```
 
 The scheduler database or durable state store—not a model’s conversational memory—would determine the actual state of the factory.
@@ -537,7 +537,7 @@ I wanted a persistent terminal workspace rather than several disconnected applic
 The envisioned command was:
 
 ```bash
-lfg launch
+warden launch
 ```
 
 It would create a tmux session with at least:
@@ -626,17 +626,17 @@ I wanted high automation with explicit control points.
 The human should be able to:
 
 ```bash
-lfg status
-lfg inspect WP-009
-lfg logs agent-04
-lfg pause WP-012
-lfg resume WP-012
-lfg reject WP-009
-lfg retry WP-009
-lfg reassign WP-009 --model codex-gpt-5.5-high
-lfg approve-contracts
-lfg approve-merge WP-009
-lfg abort-goal
+warden status
+warden inspect WP-009
+warden logs agent-04
+warden pause WP-012
+warden resume WP-012
+warden reject WP-009
+warden retry WP-009
+warden reassign WP-009 --model codex-gpt-5.5-high
+warden approve-contracts
+warden approve-merge WP-009
+warden abort-goal
 ```
 
 Critical decisions that could require human approval included:
@@ -664,25 +664,25 @@ The factory automates execution. It does not eliminate governance.
 The correct separation became:
 
 ```text
-~/CODE/lfg/
+~/CODE/railwarden/
   The reusable factory implementation
 
 ~/CODE/Tmom_Deviation/
   The TMOM product repository
 ```
 
-LFG could operate on TMOM, but it would not live inside TMOM.
+RailWarden could operate on TMOM, but it would not live inside TMOM.
 
 ---
 
-# 15. What belongs in LFG versus TMOM
+# 15. What belongs in RailWarden versus TMOM
 
-## LFG repository
+## RailWarden repository
 
 Reusable machinery:
 
 ```text
-lfg/
+railwarden/
 ├── scheduler/
 ├── agents/
 ├── providers/
@@ -721,7 +721,7 @@ Project-specific artifacts:
 
 ```text
 TMOM/
-├── .lfg/
+├── .railwarden/
 │   ├── project.yaml
 │   └── validation.yaml
 ├── orchestration/
@@ -744,7 +744,7 @@ TMOM/
 # 16. What needed to be in the system?
 
 
-## Move into LFG as reusable capability
+## Move into RailWarden as reusable capability
 
 * generic work-package schema;
 * generic DAG representation;
@@ -793,10 +793,10 @@ Once this  existed, the intended workflow was:
 
 ```bash
 cd ~/CODE/Tmom_Deviation
-lfg launch
+warden launch
 ```
 
-LFG would then:
+RailWarden would then:
 
 1. detect existing TMOM project configuration;
 2. load context and architecture;

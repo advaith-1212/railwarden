@@ -8,7 +8,7 @@ runtime UI and process container, not the source of truth.
 Each project gets a deterministic session name like:
 
 ```text
-lfg-<project>-<hash>
+railwarden-<project>-<hash>
 ```
 
 Typical panes:
@@ -23,32 +23,32 @@ Typical panes:
 Pane identifiers are persisted under:
 
 ```text
-.lfg-runtime/state/tmux-session.json
+.railwarden-runtime/state/tmux-session.json
 ```
 
 ## Process Model
 
-Worker panes start as **idle shells** (not interactive provider TUIs). When LFG
+Worker panes start as **idle shells** (not interactive provider TUIs). When RailWarden
 assigns a task, the controller injects a runner that executes the real batch
 provider command in that pane (for example `codex exec ...`), streams output
 live in the pane, and tees the same stream to the task log under
-`.lfg-runtime/logs/`.
+`.railwarden-runtime/logs/`.
 
 Headless process launch is only a fallback when the pane is missing/dead or
-tmux injection fails. Durable truth still lives in LFG runtime state and Git.
+tmux injection fails. Durable truth still lives in RailWarden runtime state and Git.
 
 ## Attach And Stop
 
 ```bash
-lfg attach
-lfg stop
-lfg restart
+warden attach
+warden stop
+warden restart
 ```
 
-`lfg restart` (and `lfg start` when a session profile already exists) recreate
+`warden restart` (and `warden start` when a session profile already exists) recreate
 the **v2** factory layout: Hermes interactive chat on the left, idle worker
 shells on the right, observability window separate. Do not use a bare
-`lfg hermes` pane — that only prints CLI help.
+`warden hermes` pane — that only prints CLI help.
 
-Use `lfg events`, `lfg dashboard`, and `lfg observability` to inspect state
+Use `warden events`, `warden dashboard`, and `warden observability` to inspect state
 instead of relying only on pane contents.

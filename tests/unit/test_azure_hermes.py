@@ -5,16 +5,16 @@ from pathlib import Path
 import pytest
 import yaml
 
-from lfg.config.init import initialize_project
-from lfg.config.loader import load_project_files
-from lfg.errors import LfgError
-from lfg.hermes.azure import (
+from railwarden.config.init import initialize_project
+from railwarden.config.loader import load_project_files
+from railwarden.errors import RailWardenError
+from railwarden.hermes.azure import (
     resolve_azure_hermes_config,
     validate_azure_inference_endpoint,
 )
-from lfg.hermes.profile import generate_hermes_profile
-from lfg.runtime.launch_setups import LaunchSetup, save_launch_setup
-from lfg.runtime.session import (
+from railwarden.hermes.profile import generate_hermes_profile
+from railwarden.runtime.launch_setups import LaunchSetup, save_launch_setup
+from railwarden.runtime.session import (
     AgentInstance,
     SessionProfile,
     load_session_profile,
@@ -24,7 +24,7 @@ from lfg.runtime.session import (
 
 
 def test_validate_rejects_foundry_project_url() -> None:
-    with pytest.raises(LfgError, match="project URL"):
+    with pytest.raises(RailWardenError, match="project URL"):
         validate_azure_inference_endpoint(
             "https://example.services.ai.azure.com/api/projects/demo"
         )
@@ -53,7 +53,7 @@ def test_resolve_azure_hermes_config_legacy_endpoint_appends_api_version() -> No
 
 
 def test_parse_azure_foundry_model_ref_splits_endpoint() -> None:
-    from lfg.runtime.model_refs import parse_model_ref
+    from railwarden.runtime.model_refs import parse_model_ref
 
     parsed = parse_model_ref(
         "azure-foundry:gpt-5.4@https://corellm.openai.azure.com/openai/v1"
@@ -94,10 +94,10 @@ def test_generated_hermes_config_uses_azure_foundry_provider(git_repo: Path) -> 
             provider="azure-foundry",
             model="gpt-5.4",
             base_url="https://example.openai.azure.com/openai/v1",
-            auth_env_var="LFG_AZURE_TEST_API_KEY",
+            auth_env_var="RAILWARDEN_AZURE_TEST_API_KEY",
         ),
         env={
-            "LFG_AZURE_TEST_API_KEY": "secret",
+            "RAILWARDEN_AZURE_TEST_API_KEY": "secret",
             "AZURE_FOUNDRY_API_KEY": "secret",
             "AZURE_OPENAI_ENDPOINT": "https://example.openai.azure.com/openai/v1",
             "OPENAI_API_VERSION": "2024-10-21",

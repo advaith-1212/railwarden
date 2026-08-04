@@ -1,20 +1,19 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
-from lfg.migration.tmom import dry_run_tmom_adoption
+from railwarden.compat import environment_value
+from railwarden.migration.tmom import dry_run_tmom_adoption
 
 
 def test_tmom_importer_contract_if_fixture_available() -> None:
     target = Path(
-        os.environ.get("LFG_TMOM_TARGET", Path.home() / "CODE/Tmom_Deviation")
+        environment_value("RAILWARDEN_TMOM_TARGET")
+        or Path.home() / "CODE/Tmom_Deviation"
     )
     source = Path(
-        os.environ.get(
-            "LFG_TMOM_SOURCE",
-            Path.home() / "CODE/tmom-worktrees/orchestrator",
-        )
+        environment_value("RAILWARDEN_TMOM_SOURCE")
+        or Path.home() / "CODE/tmom-worktrees/orchestrator"
     )
     if not target.exists() or not source.exists():
         return

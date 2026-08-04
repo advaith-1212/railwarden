@@ -3,27 +3,33 @@ requires = ["hatchling>=1.25"]
 build-backend = "hatchling.build"
 
 [project]
-name = "lfg"
+name = "railwarden"
 version = "0.3.9"
-description = "Standalone reusable agentic software-development orchestration CLI"
+description = "Deterministic, persistent, multi-provider software-delivery control plane for AI coding agents"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 license = {text = "MIT"}
-authors = [{name = "LFG"}]
+authors = [{name = "RailWarden"}]
 dependencies = [
   "langgraph>=1.0",
   "jsonschema>=4.22",
   "pydantic-ai>=1.0",
   "PyYAML>=6.0.1",
   "questionary>=2.1.0",
-  "rich>=14.0.0",
+    "rich>=14.0.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/advaith-1212/railwarden"
+Source = "https://github.com/advaith-1212/railwarden"
+Issues = "https://github.com/advaith-1212/railwarden/issues"
+
 [project.scripts]
-lfg = "lfg.cli.main:main"
+warden = "railwarden.cli.main:main"
+lfg = "railwarden.cli.main:legacy_main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/lfg"]
+packages = ["src/railwarden"]
 
 [tool.ruff]
 target-version = "py312"
@@ -37,7 +43,7 @@ line-length = 88
 python_version = "3.12"
 strict = true
 warn_unreachable = true
-files = ["src/lfg", "tests"]
+files = ["src/railwarden", "tests"]
 
 [[tool.mypy.overrides]]
 module = ["yaml", "jsonschema"]

@@ -1,14 +1,15 @@
-# LFG
+# RailWarden
 
-LFG is an evented runtime for multi-agent software development. It gives an
-AI orchestrator a deterministic execution boundary: project state, work
-packages, worktrees, provider processes, validation, review, merge gates, and
-audit logs live in LFG-owned files instead of in an agent chat transcript.
+RailWarden is a deterministic, persistent, multi-provider software-delivery
+control plane for AI coding agents. It gives an AI orchestrator a durable
+execution boundary: project state, work packages, worktrees, provider processes,
+validation, review, merge gates, and audit logs live in RailWarden-owned files
+instead of in an agent chat transcript.
 
 Mental model:
 
 ```text
-LFG         = environment / substrate / state machine / execution boundary
+RailWarden         = environment / substrate / state machine / execution boundary
 Hermes      = brain / supervisor / decision maker
 Worker CLIs = hands and legs
 ```
@@ -17,17 +18,17 @@ The intended architecture is not "Hermes Kanban as the database." The intended
 architecture is:
 
 ```text
-LFG state is the source of truth.
-Hermes observes LFG state and writes decisions/actions back through LFG tools.
+RailWarden state is the source of truth.
+Hermes observes RailWarden state and writes decisions/actions back through RailWarden tools.
 Kanban, dashboards, and consoles are projections over that state.
 ```
 
 ## Status
 
 This repository is experimental and actively evolving. The current direction is
-LFG Evented Runtime + Hermes Supervisor:
+RailWarden Evented Runtime + Hermes Supervisor:
 
-- LFG owns deterministic truth and mechanics.
+- RailWarden owns deterministic truth and mechanics.
 - Hermes owns interpretation, planning, and orchestration decisions.
 - Worker agents own scoped implementation inside assigned worktrees.
 
@@ -49,15 +50,27 @@ Prerequisites:
 Install from a checkout:
 
 ```bash
-cd /path/to/lfg
+git clone https://github.com/advaith-1212/railwarden.git
+cd railwarden
+uv sync
 uv tool install --editable .
-lfg version
+warden --help
+warden setup
+warden launch
+```
+
+For an existing local checkout:
+
+```bash
+cd /path/to/railwarden
+uv tool install --editable .
+warden version
 ```
 
 Upgrade an editable install after pulling new commits:
 
 ```bash
-lfg update
+warden update
 ```
 
 Run the test suite locally:
@@ -71,22 +84,22 @@ uv run pytest
 
 ## Quick Start In A Project
 
-From the repository you want LFG to manage:
+From the repository you want RailWarden to manage:
 
 ```bash
 cd /path/to/project
-lfg setup --yes
-lfg doctor
-lfg context status
+warden setup --yes
+warden doctor
+warden context status
 ```
 
-`lfg setup --yes` creates:
+`warden setup --yes` creates:
 
-- `.lfg/project.yaml` for durable project configuration
-- `.lfg/work_packages.yaml` for planned work-package contracts
-- `.lfg/validation.yaml` for mechanical validation commands
+- `.railwarden/project.yaml` for durable project configuration
+- `.railwarden/work_packages.yaml` for planned work-package contracts
+- `.railwarden/validation.yaml` for mechanical validation commands
 - `context/` project-memory templates
-- ignored runtime directories such as `.lfg-runtime/` and `.lfg-worktrees/`
+- ignored runtime directories such as `.railwarden-runtime/` and `.railwarden-worktrees/`
 
 Populate the context files before serious work:
 
@@ -102,37 +115,37 @@ context/CONTRIBUTING_AGENTS.md
 Then launch the local runtime:
 
 ```bash
-lfg launch --preset guided
+warden launch --preset guided
 ```
 
 Run or sample the supervisor loop:
 
 ```bash
-lfg hermes supervisor --once
-lfg hermes supervisor
+warden hermes supervisor --once
+warden hermes supervisor
 ```
 
 Useful observability commands:
 
 ```bash
-lfg snapshot
-lfg status
-lfg events --cursor 0 --limit 50
-lfg failure inspect <task-id>
-lfg result normalize <task-id>
-lfg dashboard
-lfg observability
-lfg logs
+warden snapshot
+warden status
+warden events --cursor 0 --limit 50
+warden failure inspect <task-id>
+warden result normalize <task-id>
+warden dashboard
+warden observability
+warden logs
 ```
 
 Compatibility commands for Hermes Kanban projection/import still exist:
 
 ```bash
-lfg hermes status
-lfg hermes bootstrap --dry-run
-lfg hermes bootstrap
-lfg hermes import --dry-run
-lfg hermes import --apply
+warden hermes status
+warden hermes bootstrap --dry-run
+warden hermes bootstrap
+warden hermes import --dry-run
+warden hermes import --apply
 ```
 
 Use those as a Hermes-facing planning/coordination UI, not as the canonical
@@ -143,35 +156,35 @@ ledger.
 The desired control flow is:
 
 ```text
-User launches LFG
--> LFG creates runtime environment
+User launches RailWarden
+-> RailWarden creates runtime environment
 -> Hermes starts inside that environment
 -> User gives goal to Hermes
--> Hermes asks LFG for repo/context/state
+-> Hermes asks RailWarden for repo/context/state
 -> Hermes asks architect agent to generate plan
 -> Architect writes architecture/context proposal
 -> Hermes reviews/synthesizes plan
 -> Hermes presents plan to user
 -> User approves
--> Hermes calls LFG tools to freeze plan/work packages/DAG
--> LFG records source-of-truth state
+-> Hermes calls RailWarden tools to freeze plan/work packages/DAG
+-> RailWarden records source-of-truth state
 -> Hermes assigns worker agents
--> LFG launches/supervises worker processes
+-> RailWarden launches/supervises worker processes
 -> Workers edit worktrees
--> LFG validates outputs mechanically
--> Hermes reacts to LFG events/failures
+-> RailWarden validates outputs mechanically
+-> Hermes reacts to RailWarden events/failures
 -> Hermes decides retry/handoff/repair/replan/ask-user
--> LFG executes the chosen action
--> LFG owns integration/merge gates
--> Hermes declares completion after LFG verifies completion
+-> RailWarden executes the chosen action
+-> RailWarden owns integration/merge gates
+-> Hermes declares completion after RailWarden verifies completion
 ```
 
-## What LFG Owns
+## What RailWarden Owns
 
-LFG owns durable facts and mechanics:
+RailWarden owns durable facts and mechanics:
 
-- repository and `.lfg/` configuration
-- `.lfg-runtime/` state and event logs
+- repository and `.railwarden/` configuration
+- `.railwarden-runtime/` state and event logs
 - task database and work-package contracts
 - tmux/session layout
 - Git worktrees and task branches
@@ -182,7 +195,7 @@ LFG owns durable facts and mechanics:
 - file ownership enforcement
 
 These are deterministic environment facts. They should be calculated and
-persisted by LFG, then observed by Hermes.
+persisted by RailWarden, then observed by Hermes.
 
 ## What Hermes Owns
 
@@ -216,18 +229,18 @@ Workers are scoped implementers. A worker receives:
 
 The worker edits only its assigned worktree, commits completed owned-path
 changes, runs local validation where possible, and writes a structured result.
-LFG verifies and normalizes that output before anything merges.
+RailWarden verifies and normalizes that output before anything merges.
 
 ## Repository Layout
 
 ```text
-.lfg/                     committed LFG project configuration
-.lfg-runtime/             ignored runtime state, events, logs, results
-.lfg-worktrees/           ignored worker worktrees
+.railwarden/                     committed RailWarden project configuration
+.railwarden-runtime/             ignored runtime state, events, logs, results
+.railwarden-worktrees/           ignored worker worktrees
 context/                  committed project memory created per target repo
-docs/                     LFG documentation
+docs/                     RailWarden documentation
 schemas/                  machine-readable contracts
-src/lfg/                  CLI, runtime, scheduler, validation, providers
+src/railwarden/                  CLI, runtime, scheduler, validation, providers
 templates/                worker prompt templates
 tests/                    unit, contract, and integration tests
 ```
@@ -247,6 +260,21 @@ tests/                    unit, contract, and integration tests
 - [Security](docs/security.md)
 - [Development](docs/development.md)
 - [Contributing](CONTRIBUTING.md)
+
+## Legacy Compatibility
+
+`warden` is the canonical command. The temporary `lfg` executable delegates to
+the same CLI implementation and prints a deprecation warning.
+
+RailWarden prefers `.railwarden`, `.railwarden-runtime`,
+`.railwarden-worktrees`, `.railwarden-results`, and `~/.railwarden`. When a
+preferred path does not exist but its legacy `.lfg` equivalent does, RailWarden
+reads and reuses the legacy path without overwriting or deleting it. Explicit
+migration is intentionally separate from normal startup.
+
+Environment settings use the `RAILWARDEN_*` namespace. When a
+`RAILWARDEN_*` variable is unset, RailWarden reads the corresponding deprecated
+`LFG_*` variable. If both are set, `RAILWARDEN_*` wins.
 
 ## License
 

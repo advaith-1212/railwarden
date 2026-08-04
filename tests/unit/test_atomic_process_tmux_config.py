@@ -5,14 +5,14 @@ import subprocess
 import time
 from pathlib import Path
 
-from lfg.config.init import initialize_project
-from lfg.processes.supervisor import (
+from railwarden.config.init import initialize_project
+from railwarden.processes.supervisor import (
     launch_managed,
     process_alive,
     terminate_process_group,
 )
-from lfg.tmux.session import normalized_project_name
-from lfg.util.atomic import atomic_write_json
+from railwarden.tmux.session import normalized_project_name
+from railwarden.util.atomic import atomic_write_json
 
 
 def test_runtime_atomic_writes(tmp_path: Path) -> None:
@@ -23,7 +23,7 @@ def test_runtime_atomic_writes(tmp_path: Path) -> None:
 
 def test_process_ownership_stop(tmp_path: Path) -> None:
     proc = launch_managed(
-        ["python3", "-c", "import time; time.sleep(60)"],
+        ["python", "-c", "import time; time.sleep(60)"],
         cwd=tmp_path,
         log_path=tmp_path / "p.log",
         pid_path=tmp_path / "p.json",
@@ -35,10 +35,10 @@ def test_process_ownership_stop(tmp_path: Path) -> None:
 
 
 def test_unrelated_process_untouched(tmp_path: Path) -> None:
-    other = subprocess.Popen(["python3", "-c", "import time; time.sleep(3)"])
+    other = subprocess.Popen(["python", "-c", "import time; time.sleep(3)"])
     try:
         proc = launch_managed(
-            ["python3", "-c", "import time; time.sleep(60)"],
+            ["python", "-c", "import time; time.sleep(60)"],
             cwd=tmp_path,
             log_path=tmp_path / "p.log",
             pid_path=tmp_path / "p.json",
@@ -56,4 +56,4 @@ def test_session_naming() -> None:
 def test_configuration_loading_init(git_repo: Path) -> None:
     result = initialize_project(git_repo, yes=True)
     assert result["repository"] == str(git_repo)
-    assert (git_repo / ".lfg" / "project.yaml").exists()
+    assert (git_repo / ".railwarden" / "project.yaml").exists()

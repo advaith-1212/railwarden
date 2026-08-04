@@ -8,12 +8,12 @@ from typing import Any
 import pytest
 import yaml
 
-import lfg.cli.main as cli_main
-from lfg.cli.main import main
-from lfg.config.init import initialize_project
-from lfg.config.loader import load_project_config, load_project_files
-from lfg.errors import LfgError
-from lfg.hermes.kanban import (
+import railwarden.cli.main as cli_main
+from railwarden.cli.main import main
+from railwarden.config.init import initialize_project
+from railwarden.config.loader import load_project_config, load_project_files
+from railwarden.errors import RailWardenError
+from railwarden.hermes.kanban import (
     HermesAdapter,
     apply_import_plan,
     build_import_plan,
@@ -21,7 +21,7 @@ from lfg.hermes.kanban import (
 
 
 def _write_packages(repo: Path) -> None:
-    (repo / ".lfg" / "work_packages.yaml").write_text(
+    (repo / ".railwarden" / "work_packages.yaml").write_text(
         yaml.safe_dump(
             {
                 "schema_version": "1.0.0",
@@ -62,7 +62,7 @@ def test_config_loads_hermes_kanban_defaults(git_repo: Path) -> None:
 
     config = load_project_config(git_repo)
 
-    assert config.hermes_board == "lfg-repo"
+    assert config.hermes_board == "railwarden-repo"
     assert config.hermes_project_slug == "repo"
     assert config.hermes_default_assignee == "default"
     assert config.hermes_profile_map == {}
@@ -73,7 +73,7 @@ def test_work_package_conversion_includes_contract_and_dependencies(
     git_repo: Path,
 ) -> None:
     initialize_project(git_repo, yes=True)
-    project_path = git_repo / ".lfg" / "project.yaml"
+    project_path = git_repo / ".railwarden" / "project.yaml"
     payload = yaml.safe_load(project_path.read_text(encoding="utf-8"))
     payload["hermes"]["profile_map"] = {"codex": "builder", "composer": "uiworker"}
     project_path.write_text(yaml.safe_dump(payload), encoding="utf-8")
@@ -81,13 +81,13 @@ def test_work_package_conversion_includes_contract_and_dependencies(
 
     plan = build_import_plan(load_project_files(git_repo))
 
-    assert plan.board == "lfg-repo"
+    assert plan.board == "railwarden-repo"
     assert [task.package_id for task in plan.tasks] == ["WP-1", "WP-2"]
     first = plan.tasks[0]
     assert first.assignee == "builder"
-    assert first.idempotency_key == "lfg:repo:WP-1"
+    assert first.idempotency_key == "railwarden:repo:WP-1"
     assert first.workspace == "worktree"
-    assert first.branch == "lfg/WP-1"
+    assert first.branch == "railwarden/WP-1"
     assert first.skills == ("repo-rules",)
     assert "Owned paths:\n- src/core.py" in first.body
     assert "Forbidden paths:\n- contracts/" in first.body
@@ -108,7 +108,7 @@ def test_hermes_adapter_json_reports_malformed_json(
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    with pytest.raises(LfgError, match="did not return JSON"):
+    with pytest.raises(RailWardenError, match="did not return JSON"):
         HermesAdapter("hermes").json(["kanban", "create", "x", "--json"])
 
 
@@ -156,9 +156,16 @@ def test_apply_import_plan_uses_hermes_create_and_link(git_repo: Path) -> None:
         ],
         "linked": [{"parent": "t1", "child": "t2"}],
     }
-    assert adapter.commands[0][:4] == ["kanban", "--board", "lfg-repo", "create"]
+    assert adapter.commands[0][:4] == ["kanban", "--board", "railwarden-repo", "create"]
     assert "--idempotency-key" in adapter.commands[0]
-    assert adapter.commands[-1] == ["kanban", "--board", "lfg-repo", "link", "t1", "t2"]
+    assert adapter.commands[-1] == [
+        "kanban",
+        "--board",
+        "railwarden-repo",
+        "link",
+        "t1",
+        "t2",
+    ]
 
 
 def test_cli_hermes_status_json_uses_status_payload(
@@ -174,7 +181,7 @@ def test_cli_hermes_status_json_uses_status_payload(
         lambda _config, _adapter: {
             "version": "Hermes Agent v1\nUpdate available: yes",
             "update_available": True,
-            "current_board": "lfg-repo",
+            "current_board": "railwarden-repo",
             "project_slug": "repo",
         },
     )
@@ -182,7 +189,7 @@ def test_cli_hermes_status_json_uses_status_payload(
     assert main(["hermes", "status", "--json"]) == 0
 
     payload = json.loads(capsys.readouterr().out)
-    assert payload["current_board"] == "lfg-repo"
+    assert payload["current_board"] == "railwarden-repo"
     assert payload["update_available"] is True
 
 
@@ -203,8 +210,8 @@ def test_cli_hermes_bootstrap_dry_run_does_not_call_adapter(
     assert main(["hermes", "bootstrap", "--dry-run", "--json"]) == 0
 
     payload = json.loads(capsys.readouterr().out)
-    assert payload["board"] == "lfg-repo"
-    assert "ensure Hermes Kanban board `lfg-repo`" in payload["actions"]
+    assert payload["board"] == "railwarden-repo"
+    assert "ensure Hermes Kanban board `railwarden-repo`" in payload["actions"]
 
 
 def test_cli_hermes_import_dry_run_json(

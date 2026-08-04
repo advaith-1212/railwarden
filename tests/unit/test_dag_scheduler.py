@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from lfg.config.models import WorkPackage
-from lfg.errors import ConfigurationError
-from lfg.scheduler.dag import Dag, validate_dag
+from railwarden.config.models import WorkPackage
+from railwarden.errors import ConfigurationError
+from railwarden.scheduler.dag import Dag, validate_dag
 
 
 def test_cycle_detection() -> None:

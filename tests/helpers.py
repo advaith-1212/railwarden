@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from lfg.config.init import initialize_project
+from railwarden.config.init import initialize_project
 
 
 def populate_test_context(repo: Path) -> None:

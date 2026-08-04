@@ -5,10 +5,14 @@ from pathlib import Path
 
 import pytest
 
-from lfg.config.init import initialize_project
-from lfg.config.loader import load_project_files
-from lfg.planning.jobs import pending_plan_path, planning_status, start_planning_job
-from lfg.util.atomic import atomic_write_json
+from railwarden.config.init import initialize_project
+from railwarden.config.loader import load_project_files
+from railwarden.planning.jobs import (
+    pending_plan_path,
+    planning_status,
+    start_planning_job,
+)
+from railwarden.util.atomic import atomic_write_json
 
 PLANNER_OUTPUT = """
 {
@@ -19,7 +23,7 @@ PLANNER_OUTPUT = """
       "name": "Runtime",
       "objective": "Add runtime files",
       "dependencies": [],
-      "owned_paths": ["src/lfg/runtime/"],
+      "owned_paths": ["src/railwarden/runtime/"],
       "context_refs": ["context/ARCHITECTURE.md"]
     }
   ]
@@ -34,7 +38,7 @@ def test_goal_submit_returns_planning_status_immediately(
     files = load_project_files(git_repo)
     fixture = git_repo / "planner-fixture.json"
     fixture.write_text(PLANNER_OUTPUT, encoding="utf-8")
-    monkeypatch.setenv("LFG_PLANNER_OUTPUT", str(fixture))
+    monkeypatch.setenv("RAILWARDEN_PLANNER_OUTPUT", str(fixture))
     started = start_planning_job(files.project, "build reading tracker")
     assert started["status"] == "planning"
     assert started["run_id"]

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from lfg.config.models import PlanDiff
+from railwarden.config.models import PlanDiff
 
 
 def test_plan_diff_shape() -> None:

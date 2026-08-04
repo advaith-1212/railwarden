@@ -1,7 +1,7 @@
 # Architecture
 
-LFG is the deterministic substrate for agentic software work. Hermes can reason,
-plan, and decide, but LFG owns the state machine that makes those decisions
+RailWarden is the deterministic substrate for agentic software work. Hermes can reason,
+plan, and decide, but RailWarden owns the state machine that makes those decisions
 durable and auditable.
 
 The central boundary is:
@@ -9,18 +9,18 @@ The central boundary is:
 ```text
 User
   -> Hermes supervisor
-    -> LFG tools and evented runtime
+    -> RailWarden tools and evented runtime
       -> worker CLIs
         -> Git worktrees, tests, validation, review, merge gates
 ```
 
 ## Ownership Model
 
-LFG owns durable truth and mechanics:
+RailWarden owns durable truth and mechanics:
 
-- repository-local configuration in `.lfg/`
-- runtime state in `.lfg-runtime/state/`
-- append-only events in `.lfg-runtime/events.jsonl`
+- repository-local configuration in `.railwarden/`
+- runtime state in `.railwarden-runtime/state/`
+- append-only events in `.railwarden-runtime/events.jsonl`
 - task state and work-package contracts
 - context file locations and enforcement rules
 - worktree and branch creation
@@ -37,7 +37,7 @@ Hermes owns decisions:
 - asking an architect agent for a proposed design
 - turning the design into a plan the user can approve
 - deciding parallelism and provider assignment
-- reacting to LFG events
+- reacting to RailWarden events
 - choosing retry, handoff, repair, replan, or ask-user actions
 - writing decision rationales
 - explaining completion to the user
@@ -52,15 +52,15 @@ Workers own implementation inside bounded contracts:
 
 ## Canonical State
 
-The canonical LFG ledger is the combination of:
+The canonical RailWarden ledger is the combination of:
 
 ```text
-.lfg/
-.lfg-runtime/state/
-.lfg-runtime/events.jsonl
-.lfg-runtime/results/
-.lfg-runtime/checkpoints/
-.lfg-runtime/failures/
+.railwarden/
+.railwarden-runtime/state/
+.railwarden-runtime/events.jsonl
+.railwarden-runtime/results/
+.railwarden-runtime/checkpoints/
+.railwarden-runtime/failures/
 git branches and worktrees
 validation/review artifacts
 ```
@@ -72,41 +72,41 @@ merge readiness.
 
 ## Why Kanban Is A Projection
 
-If Hermes Kanban owns task truth while LFG also owns worktrees, events, results,
+If Hermes Kanban owns task truth while RailWarden also owns worktrees, events, results,
 and merge gates, the system risks split brain:
 
-- a card may say "done" while LFG validation failed
-- a card may contain a commit hash LFG has not verified
-- a worker may be alive in LFG while the board says it is blocked
+- a card may say "done" while RailWarden validation failed
+- a card may contain a commit hash RailWarden has not verified
+- a worker may be alive in RailWarden while the board says it is blocked
 - merge readiness may be inferred from prose instead of deterministic checks
 
 The safer model is:
 
 ```text
-LFG tasks/events/results -> Hermes board/cards/dashboard
-Hermes decisions -> LFG tool calls -> LFG state transitions
+RailWarden tasks/events/results -> Hermes board/cards/dashboard
+Hermes decisions -> RailWarden tool calls -> RailWarden state transitions
 ```
 
 ## Runtime Components
 
 The current codebase is organized around these boundaries:
 
-- `src/lfg/cli/`: command-line entry points
-- `src/lfg/config/`: `.lfg/` project configuration loading and setup
-- `src/lfg/runtime/`: events, tasks, session profiles, quota, checkpoints,
+- `src/railwarden/cli/`: command-line entry points
+- `src/railwarden/config/`: `.railwarden/` project configuration loading and setup
+- `src/railwarden/runtime/`: events, tasks, session profiles, quota, checkpoints,
   context status, decisions, and result normalization
-- `src/lfg/engine/`: controller loop, dashboard, task launch and integration
-- `src/lfg/providers/`: provider adapters and health/failure classification
-- `src/lfg/planning/`: planning pipeline and architect-provider integration
-- `src/lfg/scheduler/`: DAG and task classification
-- `src/lfg/validation/`: worker result schema, package validation, review, and
+- `src/railwarden/engine/`: controller loop, dashboard, task launch and integration
+- `src/railwarden/providers/`: provider adapters and health/failure classification
+- `src/railwarden/planning/`: planning pipeline and architect-provider integration
+- `src/railwarden/scheduler/`: DAG and task classification
+- `src/railwarden/validation/`: worker result schema, package validation, review, and
   path ownership checks
-- `src/lfg/mcp/`: LFG tools exposed to Hermes or other MCP clients
-- `src/lfg/tmux/`: local pane/session runtime
+- `src/railwarden/mcp/`: RailWarden tools exposed to Hermes or other MCP clients
+- `src/railwarden/tmux/`: local pane/session runtime
 
 ## Evented Supervision
 
-LFG emits facts:
+RailWarden emits facts:
 
 ```json
 {
@@ -133,14 +133,14 @@ Hermes decides:
 handoff task-WP-004 to composer
 ```
 
-Then Hermes calls an LFG tool or command, and LFG performs the state transition,
+Then Hermes calls an RailWarden tool or command, and RailWarden performs the state transition,
 process launch, validation, or integration action.
 
 ## Context Ownership
 
 Context files are committed project memory, but their ownership is split:
 
-- LFG owns file existence, location, and enforcement.
+- RailWarden owns file existence, location, and enforcement.
 - Hermes owns content and updates.
 - Workers consume context references and avoid casual mutation.
 

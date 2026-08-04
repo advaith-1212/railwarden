@@ -7,12 +7,12 @@ from typing import Any, cast
 
 import yaml
 
-from lfg.config.init import initialize_project
-from lfg.config.loader import load_project_files
-from lfg.config.models import ValidationCommand, WorkPackage
-from lfg.integration.manager import integrate_one
-from lfg.provisioning.worktrees import ensure_worktree
-from lfg.scheduler.classifier import classify_packages, execution_plan
+from railwarden.config.init import initialize_project
+from railwarden.config.loader import load_project_files
+from railwarden.config.models import ValidationCommand, WorkPackage
+from railwarden.integration.manager import integrate_one
+from railwarden.provisioning.worktrees import ensure_worktree
+from railwarden.scheduler.classifier import classify_packages, execution_plan
 
 
 def run(repo: Path, *args: str) -> str:
@@ -23,7 +23,7 @@ def run(repo: Path, *args: str) -> str:
 
 def test_end_to_end_disposable_repo(git_repo: Path) -> None:
     initialize_project(git_repo, yes=True)
-    project_path = git_repo / ".lfg" / "project.yaml"
+    project_path = git_repo / ".railwarden" / "project.yaml"
     project = yaml.safe_load(project_path.read_text(encoding="utf-8"))
     project["project"]["integration_branch"] = "main"
     project_path.write_text(yaml.safe_dump(project), encoding="utf-8")
@@ -39,7 +39,7 @@ def test_end_to_end_disposable_repo(git_repo: Path) -> None:
             }
         ],
     }
-    (git_repo / ".lfg" / "work_packages.yaml").write_text(
+    (git_repo / ".railwarden" / "work_packages.yaml").write_text(
         yaml.safe_dump(packages), encoding="utf-8"
     )
     subprocess.run(["git", "-C", str(git_repo), "add", "."], check=True)
@@ -54,7 +54,7 @@ def test_end_to_end_disposable_repo(git_repo: Path) -> None:
         repository=git_repo,
         integration_branch="main",
         workspace=files.project.worktree_root / "wp1",
-        branch="lfg/WP-1",
+        branch="railwarden/WP-1",
         action="execute",
     )
     wt = Path(str(result["workspace"]))
@@ -66,7 +66,7 @@ def test_end_to_end_disposable_repo(git_repo: Path) -> None:
     plan = execution_plan(files.project, states)
     queue = cast(list[dict[str, Any]], plan["integration_queue"])
     assert isinstance(queue, list) and queue
-    command = ValidationCommand("ok", Path(), ("python3", "-c", "print('ok')"))
+    command = ValidationCommand("ok", Path(), ("python", "-c", "print('ok')"))
     merged = integrate_one(
         config=files.project,
         candidate=queue[0],
@@ -78,7 +78,7 @@ def test_end_to_end_disposable_repo(git_repo: Path) -> None:
 
 def test_failed_validation_rolls_back_and_preserves_untracked(git_repo: Path) -> None:
     initialize_project(git_repo, yes=True)
-    project_path = git_repo / ".lfg" / "project.yaml"
+    project_path = git_repo / ".railwarden" / "project.yaml"
     project = yaml.safe_load(project_path.read_text(encoding="utf-8"))
     project["project"]["integration_branch"] = "main"
     project_path.write_text(yaml.safe_dump(project), encoding="utf-8")
@@ -89,7 +89,7 @@ def test_failed_validation_rolls_back_and_preserves_untracked(git_repo: Path) ->
         repository=git_repo,
         integration_branch="main",
         workspace=files.project.worktree_root / "wp2",
-        branch="lfg/WP-2",
+        branch="railwarden/WP-2",
         action="execute",
     )
     wt = Path(str(result["workspace"]))
@@ -106,7 +106,7 @@ def test_failed_validation_rolls_back_and_preserves_untracked(git_repo: Path) ->
         "fail",
         Path(),
         (
-            "python3",
+            "python",
             "-c",
             "from pathlib import Path; Path('new.tmp').write_text('x'); raise SystemExit(1)",
         ),

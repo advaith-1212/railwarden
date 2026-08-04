@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from lfg.providers.health import classify_failure
+from railwarden.providers.health import classify_failure
 
 
 def test_quota_failure_classification() -> None:

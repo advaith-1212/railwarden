@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from lfg.planning.antigravity import antigravity_model_slug, resolve_antigravity_model
+from railwarden.planning.antigravity import (
+    antigravity_model_slug,
+    resolve_antigravity_model,
+)
 
 
 def test_antigravity_model_slug_normalizes_display_names() -> None:
-    assert (
-        antigravity_model_slug("Gemini 3.5 Flash (Low)")
-        == "gemini-3.5-flash-low"
-    )
+    assert antigravity_model_slug("Gemini 3.5 Flash (Low)") == "gemini-3.5-flash-low"
 
 
 def test_resolve_antigravity_model_maps_slug_to_display_name() -> None:

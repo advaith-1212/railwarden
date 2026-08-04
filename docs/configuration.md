@@ -1,16 +1,16 @@
 # Configuration
 
-LFG uses committed project configuration plus ignored runtime state.
+RailWarden uses committed project configuration plus ignored runtime state.
 
 ## Committed Configuration
 
-`lfg setup --yes` creates:
+`warden setup --yes` creates:
 
 ```text
-.lfg/project.yaml
-.lfg/work_packages.yaml
-.lfg/validation.yaml
-.lfg/state-schema-version
+.railwarden/project.yaml
+.railwarden/work_packages.yaml
+.railwarden/validation.yaml
+.railwarden/state-schema-version
 context/
 ```
 
@@ -21,8 +21,8 @@ These files can be reviewed, edited, and committed with the repository.
 Runtime state is intentionally ignored:
 
 ```text
-.lfg-runtime/
-.lfg-worktrees/
+.railwarden-runtime/
+.railwarden-worktrees/
 work/
 ```
 
@@ -30,7 +30,7 @@ Runtime files include events, task state, logs, result JSON, checkpoints,
 failure records, generated Hermes profiles, process metadata, and session
 profiles. They are local execution artifacts, not source code.
 
-## `.lfg/project.yaml`
+## `.railwarden/project.yaml`
 
 Important sections:
 
@@ -48,7 +48,7 @@ Important sections:
 
 ## Work Packages
 
-`.lfg/work_packages.yaml` contains package contracts. A package can define:
+`.railwarden/work_packages.yaml` contains package contracts. A package can define:
 
 - `id`
 - `name`
@@ -71,11 +71,11 @@ Important sections:
 - `status_notes`
 
 `status_notes` is planner/user context only. Runtime status belongs in
-`.lfg-runtime/state/tasks.json`.
+`.railwarden-runtime/state/tasks.json`.
 
 ## Validation
 
-`.lfg/validation.yaml` declares mechanical commands:
+`.railwarden/validation.yaml` declares mechanical commands:
 
 ```yaml
 schema_version: 1.0.0
@@ -90,13 +90,13 @@ commands:
       argv: ["pytest"]
 ```
 
-Prefer structured `cwd` plus `argv` over shell strings. It is easier for LFG to
+Prefer structured `cwd` plus `argv` over shell strings. It is easier for RailWarden to
 run, log, and classify.
 
 ## Context References
 
 Work packages should include `context_refs` pointing to files under `context/`.
-Hermes fills these files; LFG enforces that workers receive the relevant refs.
+Hermes fills these files; RailWarden enforces that workers receive the relevant refs.
 
 Example:
 
@@ -114,8 +114,25 @@ values. Runtime setup secrets are written under ignored user-global or
 repository-runtime paths:
 
 ```text
-~/.lfg/launch-setups.d/<setup>.json
-.lfg-runtime/secrets.env
+~/.railwarden/launch-setups.d/<setup>.json
+.railwarden-runtime/secrets.env
 ```
 
 These files must remain untracked.
+
+## Legacy path and environment compatibility
+
+RailWarden always prefers the current path when it exists. If `.railwarden` is
+absent and `.lfg` exists, the legacy project configuration is read in place.
+The same precedence applies to `.railwarden-runtime`/`.lfg-runtime`,
+`.railwarden-worktrees`/`.lfg-worktrees`,
+`.railwarden-results`/`.lfg-results`, and the corresponding user-global home
+directory. RailWarden does not overwrite or delete legacy state during normal
+operation.
+
+Current environment variables use `RAILWARDEN_*`, including
+`RAILWARDEN_HOME`, `RAILWARDEN_PLANNER_OUTPUT`,
+`RAILWARDEN_PLANNER_TIMEOUT_SECONDS`, `RAILWARDEN_PLAIN_UI`,
+`RAILWARDEN_PLAIN_PROMPTS`, `RAILWARDEN_TMOM_SOURCE`, and the retained
+`RAILWARDEN_TMON_SOURCE` spelling. Corresponding `LFG_*` variables remain
+deprecated fallbacks; a current variable always takes precedence.

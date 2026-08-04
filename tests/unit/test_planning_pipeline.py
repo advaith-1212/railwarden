@@ -5,16 +5,16 @@ from pathlib import Path
 
 import yaml
 
-from lfg.config.init import initialize_project
-from lfg.config.loader import load_project_files
-from lfg.mcp.server import _contract_repair, _contract_repair_apply
-from lfg.planning.pipeline import (
+from railwarden.config.init import initialize_project
+from railwarden.config.loader import load_project_files
+from railwarden.mcp.server import _contract_repair, _contract_repair_apply
+from railwarden.planning.pipeline import (
     approve_latest_plan,
     create_pending_plan,
     parse_planner_output,
 )
-from lfg.runtime.tasks import load_tasks
-from lfg.validation.package import commands_for_package
+from railwarden.runtime.tasks import load_tasks
+from railwarden.validation.package import commands_for_package
 
 PLANNER_OUTPUT = """
 {
@@ -25,7 +25,7 @@ PLANNER_OUTPUT = """
       "name": "Runtime",
       "objective": "Add runtime files",
       "dependencies": [],
-      "owned_paths": ["src/lfg/runtime/"],
+      "owned_paths": ["src/railwarden/runtime/"],
       "forbidden_paths": [".git/"],
       "acceptance_tests": ["pytest"],
       "preferred_providers": ["codex"]
@@ -89,10 +89,10 @@ def test_create_and_approve_pending_plan(git_repo: Path) -> None:
     approved = approve_latest_plan(files.project)
 
     assert approved["approved"] is True
-    plan = (git_repo / ".lfg" / "plan.md").read_text(encoding="utf-8")
+    plan = (git_repo / ".railwarden" / "plan.md").read_text(encoding="utf-8")
     assert plan.startswith("# Plan")
     packages = yaml.safe_load(
-        (git_repo / ".lfg" / "work_packages.yaml").read_text(encoding="utf-8")
+        (git_repo / ".railwarden" / "work_packages.yaml").read_text(encoding="utf-8")
     )
     assert packages["work_packages"][0]["preferred_providers"] == ["codex"]
     tasks = load_tasks(files.project.runtime_directory)
@@ -113,11 +113,11 @@ def test_approve_pending_plan_writes_v2_orchestration_artifacts(
       "name": "Risky runtime",
       "objective": "Add runtime files",
       "dependencies": [],
-      "owned_paths": ["src/lfg/runtime/"],
+      "owned_paths": ["src/railwarden/runtime/"],
       "forbidden_paths": [".git/"],
       "acceptance_criteria": ["all runtime tests pass"],
       "validation_commands": [
-        {"name": "runtime-tests", "command": {"cwd": ".", "argv": ["python3", "-c", "print('ok')"]}}
+        {"name": "runtime-tests", "command": {"cwd": ".", "argv": ["python", "-c", "print('ok')"]}}
       ],
       "preferred_providers": ["codex"],
       "model_profile": "codex:gpt-5.5?reasoning=high",
@@ -135,19 +135,19 @@ def test_approve_pending_plan_writes_v2_orchestration_artifacts(
     approve_latest_plan(files.project)
 
     packages = yaml.safe_load(
-        (git_repo / ".lfg" / "work_packages.yaml").read_text(encoding="utf-8")
+        (git_repo / ".railwarden" / "work_packages.yaml").read_text(encoding="utf-8")
     )
     assert packages["schema_version"] == "2.0.0"
     assert packages["work_packages"][0]["risk_level"] == "high"
-    assert (git_repo / ".lfg" / "contract_freeze_manifest.yaml").exists()
-    assert (git_repo / ".lfg" / "model_assignment.yaml").exists()
-    assert "WP-9" in (git_repo / ".lfg" / "dependency_graph.mmd").read_text(
+    assert (git_repo / ".railwarden" / "contract_freeze_manifest.yaml").exists()
+    assert (git_repo / ".railwarden" / "model_assignment.yaml").exists()
+    assert "WP-9" in (git_repo / ".railwarden" / "dependency_graph.mmd").read_text(
         encoding="utf-8"
     )
-    assert "src/lfg/runtime" in (git_repo / ".lfg" / "ownership_matrix.csv").read_text(
-        encoding="utf-8"
-    )
-    assert (git_repo / ".lfg" / "agent_prompts" / "wp-9.md").exists()
+    assert "src/railwarden/runtime" in (
+        git_repo / ".railwarden" / "ownership_matrix.csv"
+    ).read_text(encoding="utf-8")
+    assert (git_repo / ".railwarden" / "agent_prompts" / "wp-9.md").exists()
 
 
 def test_create_pending_plan_from_human_markdown_with_structuring_pass(
@@ -168,7 +168,7 @@ def test_create_pending_plan_from_human_markdown_with_structuring_pass(
     assert pending.planner_output["used_structuring_pass"] is True
 
     approve_latest_plan(files.project)
-    plan = (git_repo / ".lfg" / "plan.md").read_text(encoding="utf-8")
+    plan = (git_repo / ".railwarden" / "plan.md").read_text(encoding="utf-8")
     assert plan.startswith("# FFT Visualizer Plan")
 
 
@@ -188,7 +188,7 @@ work_packages:
     objective: Add runtime files
     dependencies: []
     owned_paths:
-      - src/lfg/runtime/
+      - src/railwarden/runtime/
     forbidden_paths:
       - .git/
     acceptance_tests:
@@ -290,7 +290,9 @@ def test_approve_pending_plan_sanitizes_future_context_refs(git_repo: Path) -> N
   ]
 }
 """
-    create_pending_plan(files.project, "build expense tracker", planner_output_text=output)
+    create_pending_plan(
+        files.project, "build expense tracker", planner_output_text=output
+    )
 
     approved = approve_latest_plan(files.project)
     packages = {item["id"]: item for item in approved["work_packages"]}
@@ -301,7 +303,7 @@ def test_approve_pending_plan_sanitizes_future_context_refs(git_repo: Path) -> N
 
 
 def test_commands_for_package_ignores_prose_acceptance_tests() -> None:
-    from lfg.config.models import WorkPackage
+    from railwarden.config.models import WorkPackage
 
     prose = WorkPackage(
         package_id="WP-2",

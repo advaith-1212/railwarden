@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import jsonschema
 
-from lfg.validation.worker_result import SCHEMA
+from railwarden.validation.worker_result import SCHEMA
 
 
 def test_worker_result_schema_contract() -> None:

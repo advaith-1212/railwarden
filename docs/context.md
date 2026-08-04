@@ -6,12 +6,12 @@ grounded in stable files instead of transient chat history.
 ## Ownership
 
 ```text
-LFG owns file existence, location, and enforcement.
+RailWarden owns file existence, location, and enforcement.
 Hermes owns content and updates.
 Workers consume context refs and avoid casual mutation.
 ```
 
-`lfg setup --yes` creates the standard context files:
+`warden setup --yes` creates the standard context files:
 
 ```text
 context/PROJECT_CONTEXT.md
@@ -60,7 +60,7 @@ User goal enters Hermes
 -> Architect proposes architecture, invariants, risks, tests, and package split
 -> Hermes writes/updates context files
 -> Hermes creates work packages with context_refs
--> LFG injects or enforces those refs in worker prompts
+-> RailWarden injects or enforces those refs in worker prompts
 -> Workers read relevant context before editing
 ```
 
@@ -73,7 +73,7 @@ id: WP-004
 name: Implement provider failure classification
 objective: Classify wrapper, auth, quota, timeout, result, and validation failures.
 owned_paths:
-  - src/lfg/providers/health.py
+  - src/railwarden/providers/health.py
   - tests/unit/test_provider_health.py
 context_refs:
   - context/ARCHITECTURE.md

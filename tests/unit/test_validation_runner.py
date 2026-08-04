@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from lfg.config.models import ValidationCommand
-from lfg.errors import ValidationError
-from lfg.validation.runner import resolve_cwd, run_validation_suite
+from railwarden.config.models import ValidationCommand
+from railwarden.errors import ValidationError
+from railwarden.validation.runner import resolve_cwd, run_validation_suite
 
 
 def test_command_working_directory_behavior(git_repo: Path) -> None:
@@ -15,7 +15,7 @@ def test_command_working_directory_behavior(git_repo: Path) -> None:
     command = ValidationCommand(
         "pwd",
         Path("sub"),
-        ("python3", "-c", "import os; assert os.path.basename(os.getcwd()) == 'sub'"),
+        ("python", "-c", "import os; assert os.path.basename(os.getcwd()) == 'sub'"),
     )
     status, results, _removed = run_validation_suite(git_repo, (command,))
     assert status == "passed"
@@ -32,7 +32,7 @@ def test_generated_artifact_cleanup(git_repo: Path) -> None:
         "gen",
         Path(),
         (
-            "python3",
+            "python",
             "-c",
             "from pathlib import Path; Path('build.out').write_text('x')",
         ),

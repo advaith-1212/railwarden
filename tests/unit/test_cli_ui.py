@@ -4,7 +4,7 @@ from io import StringIO
 
 import pytest
 
-from lfg.cli import ui
+from railwarden.cli import ui
 
 
 class _TtyStringIO(StringIO):
@@ -15,7 +15,7 @@ class _TtyStringIO(StringIO):
 def test_plain_prompt_choice_accepts_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("LFG_PLAIN_PROMPTS", "1")
+    monkeypatch.setenv("RAILWARDEN_PLAIN_PROMPTS", "1")
     monkeypatch.setattr("sys.stdin", _TtyStringIO("create-new\n"))
     value = ui.prompt_choice(
         "keep-current",
@@ -34,7 +34,7 @@ def test_questionary_style_initializes() -> None:
 def test_plain_prompt_choice_accepts_number(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("LFG_PLAIN_PROMPTS", "1")
+    monkeypatch.setenv("RAILWARDEN_PLAIN_PROMPTS", "1")
     monkeypatch.setattr("sys.stdin", _TtyStringIO("2\n"))
     value = ui.prompt_choice(
         "guided",

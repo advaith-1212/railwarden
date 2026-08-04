@@ -1,6 +1,6 @@
 # Providers
 
-Providers are external execution backends. LFG should adapt to them, supervise
+Providers are external execution backends. RailWarden should adapt to them, supervise
 them, and classify their failures, but provider processes should not own the
 orchestration state.
 
@@ -8,7 +8,7 @@ orchestration state.
 
 Common roles:
 
-- Hermes supervisor: reasons over LFG state and chooses actions.
+- Hermes supervisor: reasons over RailWarden state and chooses actions.
 - Architect: proposes architecture, context, DAG, and package contracts.
 - Coding workers: implement scoped package contracts.
 - Reviewer/validator: checks package output independently where configured.
@@ -25,7 +25,7 @@ Provider adapters should expose:
 - result collection
 - failure classification
 
-Adapters should convert provider-specific behavior into LFG facts. For example:
+Adapters should convert provider-specific behavior into RailWarden facts. For example:
 
 ```text
 provider=antigravity
@@ -39,7 +39,7 @@ Hermes then decides what to do with those facts.
 
 ## Failure Classification
 
-Good failure classification is critical. LFG should distinguish:
+Good failure classification is critical. RailWarden should distinguish:
 
 - missing or invalid credentials
 - wrapper/quoting failures

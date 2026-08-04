@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from lfg.hermes.mailbox import append_message, messages_for, parse_directive
+from railwarden.hermes.mailbox import append_message, messages_for, parse_directive
 
 
 def test_parse_directive_aliases() -> None:

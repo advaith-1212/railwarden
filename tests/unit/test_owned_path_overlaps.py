@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from lfg.planning.pipeline import _resolve_owned_path_overlaps
+from railwarden.planning.pipeline import _resolve_owned_path_overlaps
 
 
 def test_resolve_owned_path_overlaps_keeps_later_package() -> None:

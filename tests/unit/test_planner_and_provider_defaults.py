@@ -5,10 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from lfg.config.init import initialize_project
-from lfg.config.loader import load_project_config
-from lfg.planning.antigravity import DEFAULT_PLANNER_MODEL, AntigravityClaudePlanner
-from lfg.providers.adapters import default_adapters
+from railwarden.config.init import initialize_project
+from railwarden.config.loader import load_project_config
+from railwarden.planning.antigravity import (
+    DEFAULT_PLANNER_MODEL,
+    AntigravityClaudePlanner,
+)
+from railwarden.providers.adapters import default_adapters
 
 
 def test_default_project_uses_antigravity_claude_planner(git_repo: Path) -> None:

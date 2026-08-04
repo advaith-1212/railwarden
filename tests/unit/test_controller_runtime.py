@@ -6,18 +6,18 @@ from pathlib import Path
 
 import yaml
 
-from lfg.config.init import initialize_project
-from lfg.config.loader import load_project_files
-from lfg.engine.controller import controller_tick
-from lfg.engine.dashboard import render_dashboard
-from lfg.providers.adapters import ProviderAdapter
-from lfg.providers.health import classify_failure
-from lfg.runtime.tasks import load_tasks, save_tasks
+from railwarden.config.init import initialize_project
+from railwarden.config.loader import load_project_files
+from railwarden.engine.controller import controller_tick
+from railwarden.engine.dashboard import render_dashboard
+from railwarden.providers.adapters import ProviderAdapter
+from railwarden.providers.health import classify_failure
+from railwarden.runtime.tasks import load_tasks, save_tasks
 from tests.conftest import initialize_populated_project
 
 
 def _write_package(repo: Path, *, preferred: list[str] | None = None) -> None:
-    (repo / ".lfg" / "work_packages.yaml").write_text(
+    (repo / ".railwarden" / "work_packages.yaml").write_text(
         yaml.safe_dump(
             {
                 "schema_version": "1.0.0",
@@ -42,7 +42,7 @@ def _write_package(repo: Path, *, preferred: list[str] | None = None) -> None:
 
 
 def _approve(repo: Path) -> None:
-    runtime = repo / ".lfg-runtime"
+    runtime = repo / ".railwarden-runtime"
     (runtime / "state").mkdir(parents=True, exist_ok=True)
     (runtime / "state" / "pending-plan.json").write_text(
         json.dumps({"approved": True, "goal": "ship", "run_id": "test"}),
@@ -64,14 +64,14 @@ def test_setup_initializes_fresh_repo_baseline(tmp_path: Path) -> None:
         check=True,
     ).stdout.strip()
     integration = subprocess.run(
-        ["git", "-C", str(repo), "rev-parse", "integration/lfg"],
+        ["git", "-C", str(repo), "rev-parse", "integration/railwarden"],
         text=True,
         capture_output=True,
         check=True,
     ).stdout.strip()
 
     assert head == integration
-    assert (repo / ".lfg" / "project.yaml").exists()
+    assert (repo / ".railwarden" / "project.yaml").exists()
     assert (repo / "context" / "PROJECT_CONTEXT.md").exists()
 
 
@@ -87,7 +87,7 @@ def test_controller_waits_for_plan_approval(git_repo: Path) -> None:
 
 def test_controller_assigns_ready_task_by_provider_priority(git_repo: Path) -> None:
     initialize_populated_project(git_repo)
-    project_path = git_repo / ".lfg" / "project.yaml"
+    project_path = git_repo / ".railwarden" / "project.yaml"
     project = yaml.safe_load(project_path.read_text(encoding="utf-8"))
     project["project"]["integration_branch"] = "main"
     project["workers"]["providers"] = ["composer", "codex"]
@@ -104,8 +104,10 @@ def test_controller_assigns_ready_task_by_provider_priority(git_repo: Path) -> N
     task = load_tasks(files.project.runtime_directory)[0]
     assert task["status"] == "ready"
     assert task["provider"] == "codex"
-    assert ".lfg-results" in task["result_path"]
-    assert ".lfg-runtime/results" in task["runtime_result_path"]
+    assert ".railwarden-results" in task["result_path"]
+    runtime_result = Path(task["runtime_result_path"])
+    assert ".railwarden-runtime" in runtime_result.parts
+    assert "results" in runtime_result.parts
 
 
 def test_dashboard_renders_runtime_state(git_repo: Path) -> None:
@@ -117,20 +119,20 @@ def test_dashboard_renders_runtime_state(git_repo: Path) -> None:
 
     dashboard = render_dashboard(load_project_files(git_repo))
 
-    assert "LFG Dashboard" in dashboard
+    assert "RailWarden Dashboard" in dashboard
     assert "WP-1" in dashboard
     assert "Providers" in dashboard
 
 
-def test_controller_runs_lfg_validation_and_review_before_merge(
+def test_controller_runs_railwarden_validation_and_review_before_merge(
     git_repo: Path,
 ) -> None:
     initialize_populated_project(git_repo)
-    project_path = git_repo / ".lfg" / "project.yaml"
+    project_path = git_repo / ".railwarden" / "project.yaml"
     project = yaml.safe_load(project_path.read_text(encoding="utf-8"))
     project["project"]["integration_branch"] = "main"
     project_path.write_text(yaml.safe_dump(project), encoding="utf-8")
-    (git_repo / ".lfg" / "work_packages.yaml").write_text(
+    (git_repo / ".railwarden" / "work_packages.yaml").write_text(
         yaml.safe_dump(
             {
                 "schema_version": "2.0.0",
@@ -150,7 +152,7 @@ def test_controller_runs_lfg_validation_and_review_before_merge(
                                 "name": "package-check",
                                 "command": {
                                     "cwd": ".",
-                                    "argv": ["python3", "-c", "print('ok')"],
+                                    "argv": ["python", "-c", "print('ok')"],
                                 },
                             }
                         ],
@@ -221,7 +223,7 @@ def test_controller_runs_lfg_validation_and_review_before_merge(
 def test_result_path_sandbox_failure_is_not_auth() -> None:
     kind, transient, requires_human, pattern = classify_failure(
         "Codex could not write output-last-message to "
-        "/repo/.lfg-runtime/results/task.json because the sandbox blocked "
+        "/repo/.railwarden-runtime/results/task.json because the sandbox blocked "
         "the result JSON path. invalid access token from unrelated MCP server"
     )
 
@@ -233,7 +235,7 @@ def test_result_path_sandbox_failure_is_not_auth() -> None:
 
 def test_controller_recovers_from_stale_provider_auth_state(git_repo: Path) -> None:
     initialize_populated_project(git_repo)
-    project_path = git_repo / ".lfg" / "project.yaml"
+    project_path = git_repo / ".railwarden" / "project.yaml"
     project = yaml.safe_load(project_path.read_text(encoding="utf-8"))
     project["project"]["integration_branch"] = "main"
     project["workers"]["providers"] = ["codex", "composer"]
@@ -273,7 +275,7 @@ def test_controller_recovers_from_stale_provider_auth_state(git_repo: Path) -> N
 
 def test_dead_quota_process_creates_handoff_and_reassigns(git_repo: Path) -> None:
     initialize_populated_project(git_repo)
-    project_path = git_repo / ".lfg" / "project.yaml"
+    project_path = git_repo / ".railwarden" / "project.yaml"
     project = yaml.safe_load(project_path.read_text(encoding="utf-8"))
     project["project"]["integration_branch"] = "main"
     project["workers"]["providers"] = ["codex", "composer"]

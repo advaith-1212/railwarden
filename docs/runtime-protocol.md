@@ -1,36 +1,36 @@
 # Runtime Protocol
 
-The target protocol is "LFG Evented Runtime + Hermes Supervisor."
+The target protocol is "RailWarden Evented Runtime + Hermes Supervisor."
 
 ## Sequence
 
 ```text
-User launches LFG
--> LFG creates runtime environment
+User launches RailWarden
+-> RailWarden creates runtime environment
 -> Hermes starts inside that environment
 -> User gives goal to Hermes
--> Hermes asks LFG for repo/context/state
+-> Hermes asks RailWarden for repo/context/state
 -> Hermes asks architect agent to generate plan
 -> Architect writes architecture/context proposal
 -> Hermes reviews/synthesizes plan
 -> Hermes presents plan to user
 -> User approves
--> Hermes calls LFG tools to freeze plan/work packages/DAG
--> LFG records source-of-truth state
+-> Hermes calls RailWarden tools to freeze plan/work packages/DAG
+-> RailWarden records source-of-truth state
 -> Hermes assigns worker agents
--> LFG launches/supervises worker processes
+-> RailWarden launches/supervises worker processes
 -> Workers edit worktrees
--> LFG validates outputs mechanically
--> Hermes reacts to LFG events/failures
+-> RailWarden validates outputs mechanically
+-> Hermes reacts to RailWarden events/failures
 -> Hermes decides retry/handoff/repair/replan/ask-user
--> LFG executes the chosen action
--> LFG owns integration/merge gates
--> Hermes declares completion after LFG verifies completion
+-> RailWarden executes the chosen action
+-> RailWarden owns integration/merge gates
+-> Hermes declares completion after RailWarden verifies completion
 ```
 
-## LFG Emits Facts
+## RailWarden Emits Facts
 
-LFG should emit factual events and constraints, not vague prose.
+RailWarden should emit factual events and constraints, not vague prose.
 
 Example:
 
@@ -52,13 +52,13 @@ Example:
 }
 ```
 
-These events belong in `.lfg-runtime/events.jsonl` and related failure records
-under `.lfg-runtime/failures/`.
+These events belong in `.railwarden-runtime/events.jsonl` and related failure records
+under `.railwarden-runtime/failures/`.
 
 ## Hermes Chooses Actions
 
-Hermes reads LFG state, interprets the event, records a rationale, and calls an
-LFG command or MCP tool.
+Hermes reads RailWarden state, interprets the event, records a rationale, and calls an
+RailWarden command or MCP tool.
 
 Example decision:
 
@@ -67,17 +67,17 @@ Diagnosis: Antigravity wrapper failed before useful work.
 Action: handoff_provider.
 Rationale: Retrying the same wrapper is likely deterministic; Composer can
 continue the package contract.
-Tool call: lfg handoff task-WP-004 composer
+Tool call: warden handoff task-WP-004 composer
 ```
 
-LFG then executes the handoff and records the new state.
+RailWarden then executes the handoff and records the new state.
 
 ## Worker Result Contract
 
-Workers should write structured result JSON to the expected result path. LFG
-then validates and copies/normalizes the result into `.lfg-runtime/results/`.
+Workers should write structured result JSON to the expected result path. RailWarden
+then validates and copies/normalizes the result into `.railwarden-runtime/results/`.
 
-If a worker commits valid work but misses result JSON, LFG may emit a
+If a worker commits valid work but misses result JSON, RailWarden may emit a
 decision-required event. Hermes can choose to synthesize the result from Git and
 tests, or ask the worker to repair its output.
 
@@ -85,14 +85,14 @@ tests, or ask the worker to repair its output.
 
 The Hermes supervisor loop should repeatedly:
 
-1. Read latest LFG events.
+1. Read latest RailWarden events.
 2. Read task state.
 3. Read provider health and failure logs.
-4. Classify the situation if LFG has not already done so.
+4. Classify the situation if RailWarden has not already done so.
 5. Choose the next action.
-6. Call the relevant LFG tool.
+6. Call the relevant RailWarden tool.
 7. Append a Hermes decision record.
-8. Continue until LFG verifies completion or asks for human input.
+8. Continue until RailWarden verifies completion or asks for human input.
 
 The Hermes console is the user interaction surface. The supervisor loop is the
 reactive brain.
@@ -100,41 +100,41 @@ reactive brain.
 Current CLI entry point:
 
 ```bash
-lfg hermes supervisor
-lfg hermes supervisor --once
+warden hermes supervisor
+warden hermes supervisor --once
 ```
 
 The supervisor stores its cursor in:
 
 ```text
-.lfg-runtime/supervisor/state.json
+.railwarden-runtime/supervisor/state.json
 ```
 
 Hermes decision records are appended to:
 
 ```text
-.lfg-runtime/decisions.jsonl
+.railwarden-runtime/decisions.jsonl
 ```
 
 Failure details are written under:
 
 ```text
-.lfg-runtime/failures/<task-id>.json
+.railwarden-runtime/failures/<task-id>.json
 ```
 
 Manual inspection and repair commands:
 
 ```bash
-lfg events --cursor 0 --limit 100
-lfg failure inspect <task-id>
-lfg result normalize <task-id>
-lfg retry <task-id>
-lfg handoff <task-id> <provider>
+warden events --cursor 0 --limit 100
+warden failure inspect <task-id>
+warden result normalize <task-id>
+warden retry <task-id>
+warden handoff <task-id> <provider>
 ```
 
 ## Completion Rule
 
-Hermes should only declare completion after LFG verifies:
+Hermes should only declare completion after RailWarden verifies:
 
 - all required tasks are terminal
 - validation gates passed

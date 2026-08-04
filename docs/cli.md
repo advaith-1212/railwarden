@@ -1,177 +1,177 @@
 # CLI
 
-LFG's CLI manages project setup, runtime state, task execution, validation,
+RailWarden's CLI manages project setup, runtime state, task execution, validation,
 review, and observability.
 
 List commands:
 
 ```bash
-lfg --help
+warden --help
 ```
 
 ## First Run
 
-In the repository you want LFG to control:
+In the repository you want RailWarden to control:
 
 ```bash
-lfg setup --yes
-lfg doctor
+warden setup --yes
+warden doctor
 ```
 
-`lfg setup --yes` writes committed project files under `.lfg/`, creates context
+`warden setup --yes` writes committed project files under `.railwarden/`, creates context
 templates under `context/`, and ensures ignored runtime paths exist in
 `.gitignore`.
 
-`lfg doctor` checks local prerequisites and prints actionable status for Git,
+`warden doctor` checks local prerequisites and prints actionable status for Git,
 Hermes, tmux, provider CLIs, credentials, MCP startup, runtime ignore rules, and
 configured planning/provider defaults.
 
 ## Runtime Launch
 
 ```bash
-lfg launch --preset guided
+warden launch --preset guided
 ```
 
 The local launch path creates or attaches to a deterministic tmux session,
-writes runtime profile state under `.lfg-runtime/`, starts Hermes with an
-LFG-aware runtime profile, and prepares worker panes. Worker processes are
+writes runtime profile state under `.railwarden-runtime/`, starts Hermes with an
+RailWarden-aware runtime profile, and prepares worker panes. Worker processes are
 visible and recoverable from logs/events.
 
 Useful launch variants:
 
 ```bash
-lfg launch --preset default-dev-shop
-lfg launch --preset local-only
-lfg launch --profile my-session
-lfg launch --no-attach
+warden launch --preset default-dev-shop
+warden launch --preset local-only
+warden launch --profile my-session
+warden launch --no-attach
 ```
 
 Common runtime commands:
 
 ```bash
-lfg snapshot
-lfg status
-lfg dashboard
-lfg observability
-lfg events --cursor 0 --limit 50
-lfg logs
-lfg attach
-lfg stop
-lfg restart
-lfg controller --once
+warden snapshot
+warden status
+warden dashboard
+warden observability
+warden events --cursor 0 --limit 50
+warden logs
+warden attach
+warden stop
+warden restart
+warden controller --once
 ```
 
 ## Planning And Approval
 
 ```bash
-lfg plan "implement the requested goal"
-lfg approve plan
-lfg approve-contracts
-lfg replan "reason for replan"
+warden plan "implement the requested goal"
+warden approve plan
+warden approve-contracts
+warden replan "reason for replan"
 ```
 
 The approval gate exists so Hermes can present a plan, the human can approve
-it, and then LFG can freeze work-package contracts, ownership, prompts, and the
+it, and then RailWarden can freeze work-package contracts, ownership, prompts, and the
 DAG before workers begin.
 
 ## Task And Agent Control
 
 ```bash
-lfg inspect <task-id>
-lfg retry <task-id>
-lfg reject <task-id>
-lfg handoff <task-id> <provider>
-lfg validate <task-id>
-lfg review <task-id>
-lfg approve-merge <task-id>
-lfg integrate
+warden inspect <task-id>
+warden retry <task-id>
+warden reject <task-id>
+warden handoff <task-id> <provider>
+warden validate <task-id>
+warden review <task-id>
+warden approve-merge <task-id>
+warden integrate
 ```
 
 Agent and quota controls:
 
 ```bash
-lfg agent list
-lfg agent pause <agent-id>
-lfg agent resume <agent-id>
-lfg agent swap <agent-id> --to <model-ref>
-lfg quota status
-lfg checkpoint create <task-id>
+warden agent list
+warden agent pause <agent-id>
+warden agent resume <agent-id>
+warden agent swap <agent-id> --to <model-ref>
+warden quota status
+warden checkpoint create <task-id>
 ```
 
 Context, result, failure, and decision helpers:
 
 ```bash
-lfg context status
-lfg context write ARCHITECTURE.md --content-file /tmp/architecture.md
-lfg result normalize <task-id>
-lfg failure inspect <task-id>
-lfg decision record '{"observed_event":{},"diagnosis":"...","allowed_actions":["retry_same_provider"],"chosen_action":"retry_same_provider","rationale":"..."}'
+warden context status
+warden context write ARCHITECTURE.md --content-file /tmp/architecture.md
+warden result normalize <task-id>
+warden failure inspect <task-id>
+warden decision record '{"observed_event":{},"diagnosis":"...","allowed_actions":["retry_same_provider"],"chosen_action":"retry_same_provider","rationale":"..."}'
 ```
 
 ## Events
 
-`lfg events` reads the append-only runtime event log:
+`warden events` reads the append-only runtime event log:
 
 ```bash
-lfg events --cursor 0 --limit 100
+warden events --cursor 0 --limit 100
 ```
 
-Hermes should use events as signals. LFG emits facts and allowed actions;
-Hermes chooses the action and calls back into LFG.
+Hermes should use events as signals. RailWarden emits facts and allowed actions;
+Hermes chooses the action and calls back into RailWarden.
 
 ## MCP
 
-LFG exposes tools for Hermes or any MCP client:
+RailWarden exposes tools for Hermes or any MCP client:
 
 ```bash
-lfg mcp serve
+warden mcp serve
 ```
 
 Representative tools include:
 
-- `lfg.goal.submit`
-- `lfg.plan.show`
-- `lfg.plan.approve`
-- `lfg.contracts.freeze`
-- `lfg.task.list`
-- `lfg.task.inspect`
-- `lfg.task.route`
-- `lfg.task.retry`
-- `lfg.agent.swap`
-- `lfg.validation.run`
-- `lfg.review.run`
-- `lfg.merge.approve`
-- `lfg.integration.status`
+- `railwarden.goal.submit`
+- `railwarden.plan.show`
+- `railwarden.plan.approve`
+- `railwarden.contracts.freeze`
+- `railwarden.task.list`
+- `railwarden.task.inspect`
+- `railwarden.task.route`
+- `railwarden.task.retry`
+- `railwarden.agent.swap`
+- `railwarden.validation.run`
+- `railwarden.review.run`
+- `railwarden.merge.approve`
+- `railwarden.integration.status`
 
 ## Hermes Compatibility Commands
 
 The repository still includes Hermes Kanban companion commands:
 
 ```bash
-lfg hermes status
-lfg hermes supervisor --once
-lfg hermes bootstrap --dry-run
-lfg hermes bootstrap
-lfg hermes import --dry-run
-lfg hermes import --apply
-lfg hermes console
+warden hermes status
+warden hermes supervisor --once
+warden hermes bootstrap --dry-run
+warden hermes bootstrap
+warden hermes import --dry-run
+warden hermes import --apply
+warden hermes console
 ```
 
-Use `lfg hermes supervisor` as the reactive loop over LFG events. Use
+Use `warden hermes supervisor` as the reactive loop over RailWarden events. Use
 `bootstrap` and `import` for a Hermes-facing board/projection. Do not treat the
 Kanban board as the canonical database for task status, validation, merge
 readiness, or commit truth.
 
-## Updating LFG
+## Updating RailWarden
 
 For editable installs:
 
 ```bash
-lfg update
+warden update
 ```
 
 When the running install cannot infer its source checkout:
 
 ```bash
-lfg update --source /path/to/lfg
+warden update --source /path/to/railwarden
 ```
