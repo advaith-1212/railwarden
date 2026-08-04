@@ -33,8 +33,8 @@ jobs:
         run: uv build
       - name: Install built wheel in a fresh environment
         run: |
-          python -m venv .wheel-venv
-          .wheel-venv/bin/pip install dist/*.whl
+          uv venv .wheel-venv --python 3.12
+          uv pip install --python .wheel-venv/bin/python dist/*.whl
           .wheel-venv/bin/warden --help
           .wheel-venv/bin/warden version
           .wheel-venv/bin/warden doctor
