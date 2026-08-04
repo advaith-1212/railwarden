@@ -39,6 +39,13 @@ jobs:
           .wheel-venv/bin/warden version
           .wheel-venv/bin/warden doctor
           .wheel-venv/bin/python -c "import railwarden"
+          demo_repo="$(mktemp -d)"
+          git -C "$demo_repo" init -b main
+          (
+            cd "$demo_repo"
+            "$GITHUB_WORKSPACE/.wheel-venv/bin/warden" init --yes --demo
+            "$GITHUB_WORKSPACE/.wheel-venv/bin/warden" demo run
+          )
       - name: Verify runtime safety and deterministic acceptance
         run: |
           git check-ignore -q .railwarden-runtime/probe

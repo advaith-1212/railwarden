@@ -56,7 +56,7 @@ flowchart TD
 
 ## Quick start
 
-After publication, the supported public install paths are:
+After a tagged release is published, the supported public install paths are:
 
 ```bash
 uvx railwarden --help
@@ -73,7 +73,7 @@ cd railwarden-demo
 git init -b main
 git config user.name demo
 git config user.email demo@example.invalid
-warden init --demo
+warden init --yes --demo
 warden demo run
 ```
 

@@ -1,10 +1,11 @@
-name: Publish to PyPI
+name: Release and publish
 
 on:
-  workflow_dispatch:
+  release:
+    types: [published]
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 jobs:
@@ -16,9 +17,32 @@ jobs:
       url: https://pypi.org/p/railwarden
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v5
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: uv build
+      - name: Verify the tag is reachable from main
+        run: |
+          git fetch origin main:refs/remotes/origin/main
+          git merge-base --is-ancestor HEAD origin/main
+      - name: Verify the release tag
+        run: |
+          uv sync --frozen
+          uv run ruff format --check .
+          uv run ruff check .
+          uv run mypy
+          uv run pytest --cov=railwarden --cov-report=term-missing
+      - name: Build and smoke-test distributions
+        run: |
+          uv build
+          python -m venv .wheel-venv
+          .wheel-venv/bin/pip install dist/*.whl
+          .wheel-venv/bin/warden --help
+          .wheel-venv/bin/warden version
+          .wheel-venv/bin/python -c "import railwarden"
+      - name: Attach verified artifacts to the GitHub release
+        run: gh release upload "${{ github.event.release.tag_name }}" dist/* --clobber
       - uses: pypa/gh-action-pypi-publish@release/v1
